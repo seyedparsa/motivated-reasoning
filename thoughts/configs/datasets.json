@@ -1,0 +1,54 @@
+{
+    "mmlu": {
+      "repo": "cais/mmlu",
+      "subset": "all",
+      "split": "test",
+      "description": "Massive Multitask Language Understanding"
+    },
+    "arc-challenge": {
+      "repo": "allenai/ai2_arc",
+      "subset": "ARC-Challenge",
+      "split": "test",
+      "description": "AI2 Reasoning Challenge (ARC) - Challenge Set"
+    },
+    "commonsense_qa": {
+      "repo": "tau/commonsense_qa",
+      "split": "train",
+      "description": "CommonsenseQA: A Question Answering Challenge Targeting Commonsense Knowledge"
+    },
+    "gpqa": {
+      "repo": "Idavidrein/gpqa",
+      "subset": "gpqa_diamond",
+      "split": "train",
+      "description": "Graduate-level Google-proof Q&A (Diamond subset)"
+    },
+    "math-500": {
+      "repo": "HuggingFaceH4/MATH-500",
+      "split": "test",
+      "description": "MATH competition problems dataset"
+    },
+    "gsm8k": {
+      "repo": "openai/gsm8k",
+      "subset": "main",
+      "split": "train",
+      "description": "Grade School Math 8K problems"
+    },
+    "aqua": {
+      "repo": "deepmind/aqua_rat",
+      "subset": "raw",
+      "split": "train",
+      "description": "AQuA: A Dataset for Complex Reasoning in Natural Language"
+    },
+    "bbh-causal_judgement": {
+      "repo": "maveriq/bigbenchhard",
+      "subset": "causal_judgement",
+      "split": "train",
+      "description": "BigBench Hard Benchmark - Causal Judgement Task"
+    },
+    "bbh-formal_fallacies": {
+      "repo": "maveriq/bigbenchhard",
+      "subset": "formal_fallacies",
+      "split": "train",
+      "description": "BigBench Hard Benchmark - Formal Fallacies Task"
+    }
+}

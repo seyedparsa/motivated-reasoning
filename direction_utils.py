@@ -128,7 +128,7 @@ def compute_prediction_metrics(preds, labels, classification_threshold=0.5):
         recall /= num_classes
         f1 /= num_classes
 
-    metrics = {'acc': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'auc': auc, 'mse': mse}
+    metrics = {'accuracy': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'auc': auc, 'mse': mse}
     return metrics
 
 def get_hidden_states(prompts, model, tokenizer, hidden_layers, forward_batch_size, rep_token=-1, all_positions=False):
@@ -370,7 +370,7 @@ def aggregate_layers(layer_outputs, train_y, val_y, test_y, agg_model='linear', 
 
     print("train_X", train_X.shape, "val_X", val_X.shape, "test_X", test_X.shape)
 
-    maximize_metric = (tuning_metric in ['f1', 'auc', 'acc'])
+    maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])
 
     if agg_model=='rfm':
         bw_search_space = [10]
@@ -467,7 +467,7 @@ def train_rfm_probe_on_concept(train_X, train_y, val_X, val_y,
         }
     
     best_model = None
-    maximize_metric = (tuning_metric in ['f1', 'auc', 'acc', 'top_agop_vectors_ols_auc'])
+    maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy', 'top_agop_vectors_ols_auc'])
     best_score = float('-inf') if maximize_metric else float('inf')
     for reg in search_space['regs']:
         for bw in search_space['bws']:
@@ -542,7 +542,7 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
     num_classes = train_y.shape[1]
 
     best_beta = None
-    maximize_metric = (tuning_metric in ['f1', 'auc', 'acc'])
+    maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])
     best_score = float('-inf') if maximize_metric else float('inf')
     for reg in reg_search_space:
         try:
@@ -599,7 +599,7 @@ def train_logistic_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=Fal
 
     best_beta = None
     best_bias = None
-    maximize_metric = (tuning_metric in ['f1', 'auc', 'acc'])
+    maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])
     best_score = float('-inf') if maximize_metric else float('inf')
     for C in C_search_space:
         model = LogisticRegression(fit_intercept=False, max_iter=1000, C=C)

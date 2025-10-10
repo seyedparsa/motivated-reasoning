@@ -1285,3 +1285,42 @@ def honesty_dataset(data_path, tokenizer, assistant_tag, seed: int = 0):
         'train': {'inputs': train_data, 'labels': train_labels},
         'test': {'inputs': test_data, 'labels': [[1,0] for _ in range(ntest)]}
     }
+
+def rhyme_dataset(data_path, tokenizer, assistant_tag=""):
+    random.seed(0)
+    user_template = 'Given the following word, generate words similar in {rel}. \nWord 1: {word1}\n {assistant_tag}Word 2: {word2}\n Word 3:'
+    df = pd.read_csv(data_path)
+    rhyming_pairs = df[df['label'] == 1][['word1', 'word2']].values.tolist()
+    non_rhyming_pairs = df[df['label'] == 0][['word1', 'word2']].values.tolist()
+    print("Rhyming pairs", len(rhyming_pairs), "Non-rhyming pairs", len(non_rhyming_pairs))
+    n_train = 1000
+    all_pairs = rhyming_pairs[:n_train//2] + non_rhyming_pairs[:n_train//2]
+    all_labels = [1 for _ in range(n_train//2)] + [0 for _ in range(n_train//2)]
+    data = []
+    for i, pair in enumerate(all_pairs):
+        word1, word2 = pair
+        rel = 'rhyme' if all_labels[i] == 1 else 'meaning'
+        data.append(user_template.format(word1=word1, word2=word2, rel=rel, assistant_tag=assistant_tag))
+    combined = list(zip(data, all_labels))
+    print(combined[-5:])
+    random.shuffle(combined)
+    data, labels = zip(*combined)
+    return {
+        'train': {'inputs': data[:n_train], 'labels': labels[:n_train]},
+        'test': {'inputs': data[n_train:], 'labels': labels[n_train:]}
+    }
+
+def sentiment_dataset(data_path, tokenizer, assistant_tag=""):
+    df = pd.read_csv(data_path)
+    
+    data, labels = [], []
+    for i, row in df.iterrows():
+        prompt, sentiment = row['prompt'], row['sentiment']
+        data.append(prompt)
+        labels.append(sentiment)
+
+    n_train = len(data) * 3 // 4
+    return {
+        'train': {'inputs': data[:n_train], 'labels': labels[:n_train]},
+        'test': {'inputs': data[n_train:], 'labels': labels[n_train:]}
+    }

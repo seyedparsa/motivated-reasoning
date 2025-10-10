@@ -1,0 +1,7 @@
+gradio>=4.0.0
+huggingface_hub
+datasets
+transformers
+accelerate
+torch
+openai

@@ -1,0 +1,38 @@
+{
+    "qwen-2.5-7b": {
+      "repo": "Qwen/Qwen2.5-7B-Instruct",
+      "description": "Qwen 2.5 7B Instruct model"
+    },    
+    "qwen-3-8b": {
+      "repo": "Qwen/Qwen3-8B",
+      "description": "Qwen 3 8B model"
+    },
+    "qwen-3-4b": {
+      "repo": "Qwen/Qwen3-4B",
+      "description": "Qwen 3 4B model"
+    },
+    "r1-distilled-qwen-7b": {
+      "repo": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+      "description": "R1 distilled Qwen 7B model"
+    },
+    "llama-3.1-8b": {
+      "repo": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "description": "LLaMA 3.1 8B model"
+    },
+    "gemma-3-27b": {
+      "repo": "google/gemma-3-27b-it",
+      "description": "Gemma 3 27B model"
+    },
+    "gemma-3-4b": {
+      "repo": "google/gemma-3-4b-it",
+      "description": "Gemma 3 4B model"
+    },
+    "gpt-oss-20b": {
+      "repo": "openai/gpt-oss-20b",
+      "description": "GPT-OSS 20B model"
+    },
+    "gpt-oss-120b": {
+      "repo": "openai/gpt-oss-120b",
+      "description": "GPT-OSS 120B model"
+    }
+}
