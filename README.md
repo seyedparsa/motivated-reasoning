@@ -3,15 +3,14 @@
 
 ## Usage
 
+### Generation
+
 Answer to unbiased context with CoT:
 ```
 python main.py \
 --generate \
 --model {model} \
 --dataset {dataset} \
---split {split} \
---n_gen {num_data}
---bs_gen {batch_size} \
 --reason_first 
 ```
 
@@ -21,6 +20,42 @@ Add the following to answer to biased context:
 --bias {bias_type} \ # in ['expert', 'self', 'metadata']
 --hint_idx {hint_index} \ # 0 <= hint_idx < num_choices
 ```
+
+Optional:
+```
+--split {split} \
+--n_gen {num_data}
+--bs_gen {batch_size}
+```
+
+
+### Evaluation
+```
+python main.py \
+--evaluate \
+--model {model} \
+--dataset {dataset} \
+```
+
+Optional:
+```
+--split {split}
+```
+
+### Probing
+```
+python thoughts_eval.py \                                                                                                                                   
+--model {model} \
+--dataset {dataset} \
+--split {split} \
+--probe {task} \
+--bias {bias_type} \
+--bs_probe {batch_size} \
+--n_ckpt {num_checkpoints}
+```
+
+
+### Steering
 
 
 ## Citation
