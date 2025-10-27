@@ -54,6 +54,17 @@ python thoughts_eval.py \
 --n_ckpt {num_checkpoints}
 ```
 
+Example:
+```
+python main.py \
+--model qwen-3-8b \
+--dataset arc-challenge \
+--probe has-switched \
+--bias self \
+--bs_probe 8 \
+--n_ckpt 2
+```
+
 
 ### Steering
 
