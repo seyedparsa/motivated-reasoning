@@ -92,6 +92,7 @@ def get_dataset(dataset_name, split=None, max_size=None):
         subset = entry.get('subset', None)
         if split is None:
             split = entry.get('split', None)
+            print(f"Using default split: {split}")
     if subset:
         dataset = load_dataset(repo, subset, split=split)
     else:

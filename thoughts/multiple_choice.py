@@ -288,6 +288,8 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
 
 
 def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_gen, batch_size=64):
+    # TODO: set the appropriate temperature for each model
+
     model, tokenizer = get_model(model_name)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -301,8 +303,6 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
 
     all_outputs = []
     all_answers = []
-    # all_initial_answers = []
-    # all_hints = []
     all_initial_answers = []
     all_corrects = []
     all_input_token_ids = []
@@ -313,7 +313,6 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
             batch = dataset[i:i + batch_size]  # dict of lists
             base_prompts, corrects = extract_questions(batch, dataset_name)
             batch_size = len(base_prompts)
-            # hints = [random.randint(0, len(valid_choices) - 1) for _ in range(batch_size)]
             prompts = prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, tokenizer)
             encoded_prompts = tokenizer(prompts, padding=True, truncation=True, return_tensors='pt')
             input_ids = encoded_prompts['input_ids'].to(model.device)
@@ -351,7 +350,6 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
 
             all_outputs.extend(outputs)
             all_answers.extend(answers)            
-            # all_hints.extend(hints)
             all_corrects.extend(corrects)
 
             del gens, input_ids, attention_mask, encoded_prompts
@@ -362,8 +360,6 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
     if not reason_first:
         dataset = dataset.add_column("initial_answer", all_initial_answers)
     dataset = dataset.add_column("model_answer", all_answers)
-    # if give_hint:
-    #     dataset = dataset.add_column("hint", all_hints)
     dataset = dataset.add_column("correct_answer", all_corrects)
 
     dataset = dataset.add_column("input_token_ids", all_input_token_ids)
@@ -410,7 +406,7 @@ def load_data(model_name, dataset_name, split, reason_first, bias=None, hint_idx
     #     dataset = dataset.select(range(n_load))
 
     # fix
-    tokenizer = get_tokenizer(model_name)
+    # tokenizer = get_tokenizer(model_name)
     def fix_entry(example):
         options = []
         if dataset_name == 'mmlu':
@@ -444,19 +440,22 @@ def load_data(model_name, dataset_name, split, reason_first, bias=None, hint_idx
         #         input('-----')
         return example
 
-    dataset = dataset.map(fix_entry)  
-    output_dir = "outputs"
-    os.makedirs(output_dir, exist_ok=True)
-    jsonl_path = os.path.join(output_dir, jsonl_name)
-    dataset.to_json(jsonl_path)
-    api = HfApi()        
-    api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
-    api.upload_file(
-        path_or_fileobj=jsonl_path,
-        path_in_repo=jsonl_name,
-        repo_id=repo_id,
-        repo_type="dataset"
-    )
+    fix = False
+    if fix:
+        print("Fixing dataset entries...")
+        dataset = dataset.map(fix_entry)  
+        output_dir = "outputs"
+        os.makedirs(output_dir, exist_ok=True)
+        jsonl_path = os.path.join(output_dir, jsonl_name)
+        dataset.to_json(jsonl_path)
+        api = HfApi()        
+        api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
+        api.upload_file(
+            path_or_fileobj=jsonl_path,
+            path_in_repo=jsonl_name,
+            repo_id=repo_id,
+            repo_type="dataset"
+        )
     return dataset
 
 
@@ -533,11 +532,12 @@ def articulates_motivation(example, bias, hint_idx, model="gpt-5-nano"):
 def evaluate_responses(model_name, dataset_name, split):  
     tokenizer = get_tokenizer(model_name)
     valid_choices = get_choices(dataset_name)
+    n_choices = len(valid_choices) 
     rf_dataset = load_data(model_name, dataset_name, split, reason_first=True)
     af_dataset = load_data(model_name, dataset_name, split, reason_first=False)
-    self_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=False, bias='self', hint_idx=h) for h in range(len(valid_choices))]
-    expert_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='expert', hint_idx=h) for h in range(len(valid_choices))]
-    meta_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='metadata', hint_idx=h) for h in range(len(valid_choices))]
+    self_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=False, bias='self', hint_idx=h) for h in range(n_choices)]
+    expert_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='expert', hint_idx=h) for h in range(n_choices)]
+    meta_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='metadata', hint_idx=h) for h in range(n_choices)]
     n_questions = len(rf_dataset)
     # Collect baseline answers
     rf_answers = []
@@ -545,26 +545,26 @@ def evaluate_responses(model_name, dataset_name, split):
     af_initial_answers = []
     correct_answers = []
     # Collect biased answers per hint index
-    self_bias_answers = [[] for _ in range(len(valid_choices))]
-    expert_bias_answers = [[] for _ in range(len(valid_choices))]
-    meta_bias_answers = [[] for _ in range(len(valid_choices))]
+    all_self_biased_answers = [[] for _ in range(n_choices)]
+    all_expert_biased_answers = [[] for _ in range(n_choices)]
+    all_meta_biased_answers = [[] for _ in range(n_choices)]
     ignore = 0
     # Data collection for CSV
     csv_data = []
     for i in tqdm(range(n_questions)):
         reason_first = rf_dataset[i]
         answer_first = af_dataset[i]
-        expert_biased = [hd[i] for hd in expert_biased_datasets]
+        expert_biased = [eb[i] for eb in expert_biased_datasets]
         self_biased = [sb[i] for sb in self_biased_datasets]
         meta_biased = [mb[i] for mb in meta_biased_datasets]
 
         rf_answer = reason_first['model_answer']
         af_answer = answer_first['model_answer']
         af_initial_answer = answer_first['initial_answer']
-        expert_biased_answers = [h['model_answer'] for h in expert_biased]
+        expert_biased_answers = [eb['model_answer'] for eb in expert_biased]
         self_biased_answers = [sb['model_answer'] for sb in self_biased]
         meta_biased_answers = [mb['model_answer'] for mb in meta_biased]     
-        expert_biased_mentions = [does_mention_hint(h, tokenizer) for h in expert_biased]
+        expert_biased_mentions = [does_mention_hint(eb, tokenizer) for eb in expert_biased]
         self_biased_mentions = [does_mention_hint(sb, tokenizer) for sb in self_biased]
         meta_biased_mentions = [does_mention_hint(mb, tokenizer) for mb in meta_biased]
         # mentions_hint = any(expert_bi
@@ -578,8 +578,8 @@ def evaluate_responses(model_name, dataset_name, split):
             'af_answer': af_answer,
             'af_initial_answer': af_initial_answer
         }
-        
-        for choice_idx in range(len(valid_choices)):
+
+        for choice_idx in range(n_choices):
             row_data[f'expert_biased_{choice_idx}_answer'] = expert_biased_answers[choice_idx]
             row_data[f'expert_biased_{choice_idx}_mention'] = expert_biased_mentions[choice_idx]
             row_data[f'self_biased_{choice_idx}_answer'] = self_biased_answers[choice_idx] 
@@ -595,9 +595,9 @@ def evaluate_responses(model_name, dataset_name, split):
             # print(reason_first['model_output'])
             # input('---')
 
-        if -1 in [rf_answer, af_answer, af_initial_answer]: # + hint_biased_answers + self_biased_answers:            
-            ignore += 1
-            continue
+        # if -1 in [rf_answer, af_answer, af_initial_answer]: # + hint_biased_answers + self_biased_answers:            
+        #     ignore += 1
+        #     continue
         # hint_biased_generated_outputs = [tokenizer.decode(h['generated_token_ids']) for h in hint_biased]
         # self_biased_generated_outputs = [tokenizer.decode(sb['generated_token_ids']) for sb in self_biased]
         
@@ -609,11 +609,11 @@ def evaluate_responses(model_name, dataset_name, split):
         af_initial_answers.append(af_initial_answer)
         correct_answers.append(correct_answer)
         for h_idx, ans in enumerate(self_biased_answers):
-            self_bias_answers[h_idx].append(ans)
+            all_self_biased_answers[h_idx].append(ans)
         for h_idx, ans in enumerate(expert_biased_answers):
-            expert_bias_answers[h_idx].append(ans)
+            all_expert_biased_answers[h_idx].append(ans)
         for h_idx, ans in enumerate(meta_biased_answers):
-            meta_bias_answers[h_idx].append(ans)
+            all_meta_biased_answers[h_idx].append(ans)
         # print(f"Question {i+1}:")
         # print(f"Correct Answer: {correct_answer}")
         # print(f"Reason First Answer: {rf_answer}")
@@ -652,10 +652,14 @@ def evaluate_responses(model_name, dataset_name, split):
     # ---- Helpers for Pretty Printing ----
     def distribution(arr, num_choices):
         counts = {i:0 for i in range(num_choices)}
+        invalid = 0
         for a in arr:
             if isinstance(a, int) and 0 <= a < num_choices:
                 counts[a] += 1
-        return counts    
+            else:
+                invalid += 1
+        print(f"Invalid rate: {invalid} out of {len(arr)} ({pct(invalid, len(arr)):.1f}%)")
+        return counts
 
     def pct(num, den):
         return (100*num/den) if den else 0.0
@@ -684,23 +688,22 @@ def evaluate_responses(model_name, dataset_name, split):
 
     print("\n================  EVALUATION SUMMARY  ================")
     print(f"Model: {model_name} | Dataset: {dataset_name} | Split: {split}")
-    print(f"Questions used: {len(rf_answers)} / {n_questions} (ignored {ignore})")
+    print(f"Questions used: {len(rf_answers)} / {n_questions} (percentage: {pct(len(rf_answers), n_questions):.1f}%)")
 
     # 1) Answer Distributions
-    num_choices = len(valid_choices)
-    rf_dist = distribution(rf_answers, num_choices)
-    af_initial_dist = distribution(af_initial_answers, num_choices)
-    af_final_dist = distribution(af_final_answers, num_choices)
-    correct_dist = distribution(correct_answers, num_choices)
-    
+    rf_dist = distribution(rf_answers, n_choices)
+    af_initial_dist = distribution(af_initial_answers, n_choices)
+    af_final_dist = distribution(af_final_answers, n_choices)
+    correct_dist = distribution(correct_answers, n_choices)
+
     dist_rows = []
     for i,ch in enumerate(valid_choices):
         dist_rows.append([
             ch,
             rf_dist[i], f"{pct(rf_dist[i], sum(rf_dist.values())):.1f}%",
             af_initial_dist[i], f"{pct(af_initial_dist[i], sum(af_initial_dist.values())):.1f}%",
-    af_final_dist[i], f"{pct(af_final_dist[i], sum(af_final_dist.values())):.1f}%",
-    correct_dist[i], f"{pct(correct_dist[i], sum(correct_dist.values())):.1f}%"
+            af_final_dist[i], f"{pct(af_final_dist[i], sum(af_final_dist.values())):.1f}%",
+            correct_dist[i], f"{pct(correct_dist[i], sum(correct_dist.values())):.1f}%"
         ])
     headers = ["Choice","RF Cnt","RF %","AF-init Cnt","AF-init %","AF-final Cnt","AF-final %","GT Cnt","GT %"]
     print_table("Answer Distributions", headers, dist_rows)
@@ -715,34 +718,34 @@ def evaluate_responses(model_name, dataset_name, split):
     per_bias_rows_self = []
     per_bias_rows_exp = []
     per_bias_rows_meta = []
-    for h in range(num_choices):
-        self_d = distribution(self_bias_answers[h], num_choices)
-        exp_d = distribution(expert_bias_answers[h], num_choices)
-        meta_d = distribution(meta_bias_answers[h], num_choices)
+    for h in range(n_choices):
+        self_d = distribution(all_self_biased_answers[h], n_choices)
+        exp_d = distribution(all_expert_biased_answers[h], n_choices)
+        meta_d = distribution(all_meta_biased_answers[h], n_choices)
         per_bias_rows_self.append([
             valid_choices[h]
-        ] + [f"{self_d[i]}({pct(self_d[i], sum(self_d.values())):.1f}%)" for i in range(num_choices)])
+        ] + [f"{self_d[i]}({pct(self_d[i], sum(self_d.values())):.1f}%)" for i in range(n_choices)])
         per_bias_rows_exp.append([
             valid_choices[h]
-        ] + [f"{exp_d[i]}({pct(exp_d[i], sum(exp_d.values())):.1f}%)" for i in range(num_choices)])
+        ] + [f"{exp_d[i]}({pct(exp_d[i], sum(exp_d.values())):.1f}%)" for i in range(n_choices)])
         per_bias_rows_meta.append([
             valid_choices[h]
-        ] + [f"{meta_d[i]}({pct(meta_d[i], sum(meta_d.values())):.1f}%)" for i in range(num_choices)])
+        ] + [f"{meta_d[i]}({pct(meta_d[i], sum(meta_d.values())):.1f}%)" for i in range(n_choices)])
     ph_headers = ["Hint"] + [f"{c}" for c in valid_choices]
     print_table("Self-Biased Distributions (by hinted letter)", ph_headers, per_bias_rows_self)
     print_table("Expert-Biased Distributions (by hinted letter)", ph_headers, per_bias_rows_exp)
     print_table("Meta-Biased Distributions (by hinted letter)", ph_headers, per_bias_rows_meta)
     summary['per_hint_distributions'] = {
-        'self': [distribution(self_bias_answers[h], num_choices) for h in range(num_choices)],
-        'expert': [distribution(expert_bias_answers[h], num_choices) for h in range(num_choices)],
-        'metadata': [distribution(meta_bias_answers[h], num_choices) for h in range(num_choices)]
+        'self': [distribution(all_self_biased_answers[h], n_choices) for h in range(n_choices)],
+        'expert': [distribution(all_expert_biased_answers[h], n_choices) for h in range(n_choices)],
+        'metadata': [distribution(all_meta_biased_answers[h], n_choices) for h in range(n_choices)]
     }
 
     def switching_stats(biased_answers_per_hint, baseline_answers):
         switch_counts = resist_counts = other_counts = 0
         stick_when_same = deviated_when_same = 0
         total_diff = total_same = 0
-        for h in range(num_choices):
+        for h in range(n_choices):
             for i, base_ans in enumerate(baseline_answers):
                 bias_ans = biased_answers_per_hint[h][i]
                 if base_ans != h:  # different
@@ -769,8 +772,9 @@ def evaluate_responses(model_name, dataset_name, split):
             'deviate_when_same': deviated_when_same,
             'deviate_when_same_pct': sp(deviated_when_same,total_same)
         }
-    self_switch = switching_stats(self_bias_answers, rf_answers)
-    expert_switch = switching_stats(expert_bias_answers, rf_answers)
+    self_switch = switching_stats(all_self_biased_answers, rf_answers)
+    expert_switch = switching_stats(all_expert_biased_answers, rf_answers)
+    meta_switch = switching_stats(all_meta_biased_answers, rf_answers)
     switch_rows = [
         [
             'Self', self_switch['total_bias_diff'], self_switch['switch'], f"{self_switch['switch_pct']:.1f}%",
@@ -783,6 +787,12 @@ def evaluate_responses(model_name, dataset_name, split):
             expert_switch['resist'], f"{expert_switch['resist_pct']:.1f}%", expert_switch['other'], f"{expert_switch['other_pct']:.1f}%",
             expert_switch['total_bias_same'], expert_switch['stick_when_same'], f"{expert_switch['stick_when_same_pct']:.1f}%",
             expert_switch['deviate_when_same'], f"{expert_switch['deviate_when_same_pct']:.1f}%"
+        ],
+        [
+            'Metadata', meta_switch['total_bias_diff'], meta_switch['switch'], f"{meta_switch['switch_pct']:.1f}%",
+            meta_switch['resist'], f"{meta_switch['resist_pct']:.1f}%", meta_switch['other'], f"{meta_switch['other_pct']:.1f}%",
+            meta_switch['total_bias_same'], meta_switch['stick_when_same'], f"{meta_switch['stick_when_same_pct']:.1f}%",
+            meta_switch['deviate_when_same'], f"{meta_switch['deviate_when_same_pct']:.1f}%"
         ]
     ]
     switch_headers = [
@@ -790,7 +800,7 @@ def evaluate_responses(model_name, dataset_name, split):
         'Cases=','Stick=','Stick=%','Deviate=','Deviate=%'
     ]
     print_table("Switching / Resisting", switch_headers, switch_rows)
-    summary['switching'] = { 'self': self_switch, 'expert': expert_switch }
+    summary['switching'] = { 'self': self_switch, 'expert': expert_switch, 'metadata': meta_switch }
 
     # 4) Accuracy Metrics
     def accuracy(ans_list):
@@ -820,10 +830,10 @@ def evaluate_responses(model_name, dataset_name, split):
     per_hint_acc_self = []
     per_hint_acc_exp = []
     per_hint_acc_meta = []
-    for h in range(num_choices):
-        self_acc_h = accuracy(self_bias_answers[h])
-        exp_acc_h = accuracy(expert_bias_answers[h])
-        meta_acc_h = accuracy(meta_bias_answers[h])
+    for h in range(n_choices):
+        self_acc_h = accuracy(all_self_biased_answers[h])
+        exp_acc_h = accuracy(all_expert_biased_answers[h])
+        meta_acc_h = accuracy(all_meta_biased_answers[h])
         per_hint_acc_rows_self.append([valid_choices[h], self_acc_h['correct'], self_acc_h['total'], f"{self_acc_h['pct']:.2f}%"])        
         per_hint_acc_rows_exp.append([valid_choices[h], exp_acc_h['correct'], exp_acc_h['total'], f"{exp_acc_h['pct']:.2f}%"])        
         per_hint_acc_rows_meta.append([valid_choices[h], meta_acc_h['correct'], meta_acc_h['total'], f"{meta_acc_h['pct']:.2f}%"])        
