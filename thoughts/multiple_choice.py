@@ -420,7 +420,7 @@ def process_dataset(dataset, model_name, dataset_name, bias=None, hint_idx=None)
     def process_cot(example, llm='gpt-5-nano'):
         # if 'cot_mentions_hint_keyword' not in example:
             # example['cot_mentions_hint_keyword'] = cot_mentions_hint_keyword(example, tokenizer)
-        if bias:
+        if bias and f'cot_mentions_hint_{llm}' not in example:
             mentions_keyword = cot_mentions_hint_keyword(example, tokenizer)            
             mentions_llm, mention_excerpt = cot_mentions_hint_llm(example, bias, hint_idx, tokenizer, llm)            
             if mentions_keyword != mentions_llm:
