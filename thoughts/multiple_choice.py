@@ -3,7 +3,7 @@ from itertools import product
 import torch
 import random
 import re
-import rfm
+# import rfm
 from tqdm import tqdm
 from transformers import StoppingCriteria, StoppingCriteriaList
 import openai
@@ -420,17 +420,19 @@ def process_dataset(dataset, model_name, dataset_name, bias=None, hint_idx=None)
     def process_cot(example, llm='gpt-5-nano'):
         # if 'cot_mentions_hint_keyword' not in example:
             # example['cot_mentions_hint_keyword'] = cot_mentions_hint_keyword(example, tokenizer)
-        if bias and f'cot_mentions_hint_{llm}' not in example:
-            mentions_keyword = cot_mentions_hint_keyword(example, tokenizer)            
+        if bias and f'cot_mentions_hint_keyword' not in example:
+            mentions_keyword = cot_mentions_hint_keyword(example, tokenizer)
+            example['cot_mentions_hint_keyword'] = mentions_keyword
+        if bias and llm and f'cot_mentions_hint_{llm}' not in example:
+            mentions_keyword = example['cot_mentions_hint_keyword']
             mentions_llm, mention_excerpt = cot_mentions_hint_llm(example, bias, hint_idx, tokenizer, llm)            
             if mentions_keyword != mentions_llm:
                 print(f"Mentioned hint keyword: {mentions_keyword}, Mentioned hint LLM: {mentions_llm} | Excerpt: {mention_excerpt}")
                 print(example['model_output'])
-                print('--------------------------------')
-            example['cot_mentions_hint_keyword'] = mentions_keyword
+                print('--------------------------------')            
             example[f'cot_mentions_hint_{llm}'] = mentions_llm            
         return example
-    dataset = dataset.map(process_cot)  
+    dataset = dataset.map(lambda x: process_cot(x, None))
     print(f"Cot mentions hint failures: {cot_mentions_hint_failures}")
     
     return dataset
@@ -640,12 +642,12 @@ def evaluate_responses(model_name, dataset_name, split):
     tokenizer = get_tokenizer(model_name)
     valid_choices = get_choices(dataset_name)
     n_choices = len(valid_choices) 
-    # rf_dataset = load_data(model_name, dataset_name, split, reason_first=True)
-    # af_dataset = load_data(model_name, dataset_name, split, reason_first=False)
-    # self_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=False, bias='self', hint_idx=h) for h in range(n_choices)]
+    rf_dataset = load_data(model_name, dataset_name, split, reason_first=True)
+    af_dataset = load_data(model_name, dataset_name, split, reason_first=False)
+    self_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=False, bias='self', hint_idx=h) for h in range(n_choices)]
     expert_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='expert', hint_idx=h) for h in range(n_choices)]
-    # meta_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='metadata', hint_idx=h) for h in range(n_choices)]
-    exit(0)
+    meta_biased_datasets = [load_data(model_name, dataset_name, split, reason_first=True, bias='metadata', hint_idx=h) for h in range(n_choices)]
+    # exit(0)
     n_questions = len(rf_dataset)
     # Collect baseline answers
     rf_answers = []
@@ -1243,7 +1245,7 @@ def probe_responses(model_name, dataset_name, split, n_load, bias, detect, n_ckp
     test_accuracy_rows = []
     probes = []
 
-    for layer in range(n_layers):  # Only last 10 layers
+    for layer in range(n_layers):  
         # print(f"Using activations for layer={layer}")
         if universal_probe:
             train_data, train_y = extract_data(train_indices, layer)

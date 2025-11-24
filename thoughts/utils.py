@@ -7,7 +7,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset, load_from_disk
 
 
-cache_dir = "/work/nvme/bbjr/huggingface/"
+# cache_dir = "/work/nvme/bbjr/huggingface/"
+# cache_dir = "~/huggingface/"
 
 
 def get_tokenizer(model_name):
@@ -15,7 +16,7 @@ def get_tokenizer(model_name):
         config = json.load(f)
         model_repo = config[model_name]['repo']
 
-    tokenizer = AutoTokenizer.from_pretrained(model_repo, cache_dir=cache_dir, trust_remote_code=True, use_fast=True, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(model_repo, trust_remote_code=True, use_fast=True, padding_side="left")
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -29,7 +30,7 @@ def get_model(model_name, device="auto"):
         config = json.load(f)
         model_repo = config[model_name]['repo']
 
-    tokenizer = AutoTokenizer.from_pretrained(model_repo, cache_dir=cache_dir, trust_remote_code=True, use_fast=True, padding_side="left")
+    tokenizer = AutoTokenizer.from_pretrained(model_repo, trust_remote_code=True, use_fast=True, padding_side="left")
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -70,7 +71,7 @@ def get_model(model_name, device="auto"):
         dtype=dtype,
         device_map=device_map,
         trust_remote_code=True,
-        cache_dir=cache_dir
+        # cache_dir=cache_dir
     )
     
     model.generation_config.temperature = None
