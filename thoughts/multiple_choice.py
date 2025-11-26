@@ -14,7 +14,7 @@ import pandas as pd
 
 from torch.utils.data import DataLoader, TensorDataset
 from thoughts.utils import get_choices, get_dataset, get_model, get_tokenizer
-from datasets import load_from_disk, load_dataset
+from datasets import load_from_disk, load_dataset, Dataset
 from huggingface_hub import HfApi
 import os
 import tempfile
@@ -452,24 +452,26 @@ def process_dataset(dataset, model_name, dataset_name, bias=None, hint_idx=None)
     return dataset
 
 def load_data(model_name, dataset_name, split, reason_first, bias=None, hint_idx=None):
-    # if debug:
-    #     repo_id += "-debug"
     repo_id = f"seyedparsa/{model_name}-{dataset_name}"
-    output_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "outputs")
-    os.makedirs(output_dir, exist_ok=True)    
+    # output_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "outputs")
+    # os.makedirs(output_dir, exist_ok=True)    
     jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{f'{bias}_biased_{hint_idx}' if bias else 'unbiased'}.jsonl"
     # jsonl_path = os.path.join(output_dir, jsonl_name)
     hub_path = f"hf://datasets/{repo_id}/{jsonl_name}"
+    dataset = load_dataset("json", data_files={"train": hub_path}, download_mode="reuse_dataset_if_exists")["train"]
+    # dataset = Dataset.from_json(hub_path)
+    print(len(dataset), "examples loaded from", hub_path)
+    return dataset
+
     # Use a unique cache directory to avoid loading stale cached data
     # This ensures we always get the latest version from the server, not a cached one
     # cache_dir = tempfile.mkdtemp(prefix="hf_datasets_")
     # try:
-    dataset = load_dataset("json", data_files={"train": hub_path}, download_mode="force_redownload")["train"]
+    # print(f"Loading dataset from {hub_path} with cache directory {cache_dir}")
     # finally:
     #     # Clean up the temporary cache directory after loading
     #     if os.path.exists(cache_dir):
     #         shutil.rmtree(cache_dir)
-    print(len(dataset), "examples loaded from", hub_path)
     # print(dataset.column_names)    
     # dataset = process_dataset(dataset, model_name, dataset_name, bias, hint_idx)
     # print(dataset.column_names)
@@ -493,7 +495,6 @@ def load_data(model_name, dataset_name, split, reason_first, bias=None, hint_idx
     #     dataset = dataset.select(range(n_load))
 
 
-    return dataset
 
 
 def cot_mentions_hint_keyword(example, tokenizer):    
@@ -1035,6 +1036,7 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
     not_parsed_cnt = 0
     empty_cnt = 0
     for i in tqdm(subset_indices):
+        # print(f"Processing example {i} of {len(subset_indices)}")
         question_examples = []
         rf_example = rf_dataset[i]
         if rf_example['model_answer'] == -1:
