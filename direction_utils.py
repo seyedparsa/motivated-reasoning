@@ -602,8 +602,9 @@ def train_logistic_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=Fal
     maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])
     best_score = float('-inf') if maximize_metric else float('inf')
     for C in C_search_space:
-        model = LogisticRegression(fit_intercept=False, max_iter=1000, C=C)
+        model = LogisticRegression(fit_intercept=use_bias, max_iter=5000, C=C)
         model.fit(train_X.cpu(), train_y_flat.cpu())
+
         
         # Get probability predictions
         val_probs = torch.tensor(model.predict_proba(val_X.cpu()))
