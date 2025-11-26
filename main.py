@@ -2,7 +2,7 @@ import argparse
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from thoughts.multiple_choice import generate_responses, probe_responses, evaluate_responses
+from thoughts.multiple_choice import generate_responses, train_probes, evaluate_responses, evaluate_probes
 
     
 
@@ -54,14 +54,18 @@ if __name__ == "__main__":
     parser.add_argument("--hint_idx", type=int, default=0, help="Index of the hint to provide")
     parser.add_argument("--generate", action='store_true', help="Generate outputs")
     parser.add_argument("--evaluate", action='store_true', help="Evaluate generated outputs")
-    parser.add_argument("--probe", type=str, help="Train and evaluate probes") 
+    parser.add_argument("--train_probes", action='store_true', help="Train probes")
+    parser.add_argument("--evaluate_probes", action='store_true', help="Evaluate probes")
+    parser.add_argument("--probe", type=str, help="probe type (e.g., 'bias', 'has-switched', 'will-switch')") 
     # parser.add_argument("--per_layer", action='store_true', help="Train a probe per layer")    
     parser.add_argument("--universal", action='store_true', help="Use a universal probe")   
     parser.add_argument("--balanced", action='store_true', help="Use balanced examples for probing") 
 
-    parser.add_argument("--n_gen", type=int,  help="Number of responses to generate")
+    # parser.add_argument("--n_gen", type=int,  help="Number of responses to generate")
     parser.add_argument("--bs_gen", type=int, default=64, help="Batch size for generation")
-    parser.add_argument("--n_train", type=int, help="Number of responses to train on")
+    # parser.add_argument("--n_train", type=int, help="Number of responses to train on")
+    parser.add_argument("--n_questions", type=int, help="Number of questions to load")
+    parser.add_argument("--n_test_questions", type=int, help="Number of questions to test on")
     parser.add_argument("--bs_probe", type=int, default=64, help="Batch size for probing")
     parser.add_argument("--n_ckpts", type=int, help="Number of samples from each response")
     parser.add_argument("--ckpt", type=str, default="rel", help="Checkpointing strategy (rel, prefix, suffix)")
@@ -71,9 +75,11 @@ if __name__ == "__main__":
     reason_first = args.reason_first or (args.bias in ['expert', 'metadata'])
 
     if args.generate:
-        generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, args.n_gen, args.bs_gen)
+        generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, args.n_questions, args.bs_gen)
     if args.evaluate:
         evaluate_responses(args.model, args.dataset, split)    
-    if args.probe:
-        probe_responses(args.model, args.dataset, split, args.n_train, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, args.bs_probe)
+    if args.train_probes:
+        train_probes(args.model, args.dataset, split, args.n_questions, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, args.bs_probe)
+    if args.evaluate_probes:
+        evaluate_probes(args.model, args.dataset, split, args.n_questions, args.n_test_questions, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, args.bs_probe)
 
