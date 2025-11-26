@@ -1102,7 +1102,7 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
     return examples, labels
 
 
-def extract_hidden_states(model, tokenizer, examples, labels, n_ckpt, ckpt='rel', batch_size=64):
+def extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt='rel', batch_size=64):
     print(f"Label distribution: {np.bincount(labels)}")    
     input_col = "input_token_ids"
     gen_col = "generated_token_ids"
@@ -1139,11 +1139,11 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpt, ckpt='rel'
         for b in range(len(batch_seqs)):
             gen_len = gen_lengths[start + b]
             if ckpt == 'rel':
-                ckpt_indices = -(gen_len+1) + np.linspace(0, gen_len-1, n_ckpt).astype(int)
+                ckpt_indices = -(gen_len+1) + np.linspace(0, gen_len-1, n_ckpts).astype(int)
             elif ckpt == 'prefix':
-                ckpt_indices = -(gen_len+1) + np.arange(0, n_ckpt) * 5
+                ckpt_indices = -(gen_len+1) + np.arange(0, n_ckpts) * 5
             elif ckpt == 'suffix':
-                ckpt_indices = -2 - np.arange(n_ckpt-1, -1, -1) * 5
+                ckpt_indices = -2 - np.arange(n_ckpts-1, -1, -1) * 5
             per_layer = []
             for layer_h in hs_tuple:  # (B,L,H)                
                 per_layer.append(layer_h[b, ckpt_indices, :].detach().cpu())
@@ -1156,7 +1156,7 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpt, ckpt='rel'
 def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, device=None):
     n_choices = len(set(labels))
     n_layers = len(hidden_states[0])
-    n_ckpt = len(hidden_states[0][0])
+    n_ckpts = len(hidden_states[0][0])
     layers = [layer] if layer is not None else range(n_layers)
     if indices is None:
         indices = range(len(labels))    
@@ -1167,7 +1167,7 @@ def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, devic
         y = torch.cat(y_layers, dim=0)    
     else:        
         X_layers = [torch.cat([hidden_states[i][layer] for i in indices], dim=0).float() for layer in layers]
-        y_layers = [torch.cat([torch.tensor([labels[i]] * n_ckpt, dtype=torch.long) for i in indices], dim=0) for layer in layers]
+        y_layers = [torch.cat([torch.tensor([labels[i]] * n_ckpts, dtype=torch.long) for i in indices], dim=0) for layer in layers]
         X = torch.cat(X_layers, dim=0)
         y = torch.cat(y_layers, dim=0)    
         # X = torch.cat([hidden_states[i][layer] for i in indices], dim=0).float()
@@ -1178,7 +1178,7 @@ def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, devic
     return X, y
 
 
-def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ckpt, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
+def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
     model, tokenizer = get_model(model_name)
     examples, labels = label_CoTs(
         model_name=model_name,
@@ -1192,7 +1192,7 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
         tokenizer=tokenizer,
         shuffle_seed=shuffle_seed,
     )
-    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpt, ckpt=ckpt, batch_size=batch_size)
+    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt=ckpt, batch_size=batch_size)
     
     n_layers = len(hidden_states[0])
     n_choices = len(set(labels))
@@ -1223,7 +1223,7 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
     
     for layer in range(n_layers):  
         if universal_probe:
-            probe_config = f"{probe}_universal_{n_ckpt}{ckpt}_layer{layer}"
+            probe_config = f"{probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
             rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
             linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
             train_data, train_y = extract_Xy(hidden_states, labels, train_indices, layer=layer, device=model.device)
@@ -1246,8 +1246,8 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
             logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
             print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}, Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}, Logistic Val Acc: {logistic_val_metrics['accuracy']:.4f}, Logistic Val AUC: {logistic_val_metrics['auc']:.4f}")            
         if not universal_probe:
-            for step in range(n_ckpt): 
-                probe_config = f"{probe}_step{step}_{n_ckpt}{ckpt}_layer{layer}"
+            for step in range(n_ckpts): 
+                probe_config = f"{probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
                 rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
                 linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")                
                 logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
@@ -1279,7 +1279,7 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                 print(f"Validation: Layer {layer}, Step {step}: RFM AUC: {rfm_val_metrics['auc']:.4f}, Linear AUC: {linear_val_metrics['auc']:.4f}, Logistic AUC: {logistic_val_metrics['auc']:.4f}")
    
 
-def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpt, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
+def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
     model, tokenizer = get_model(model_name)
     examples, labels = label_CoTs(
         model_name=model_name,
@@ -1293,21 +1293,21 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
         tokenizer=tokenizer,
         shuffle_seed=shuffle_seed,
     )
-    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpt, ckpt=ckpt, batch_size=batch_size)
+    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt=ckpt, batch_size=batch_size)
     probe_env = f"{model_name}_{dataset_name}-{split}-{n_questions}_{bias}-biased_{'balanced' if balanced else 'unbalanced'}"    
     probes_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "probes", probe_env)
     n_layers = len(hidden_states[0])
     for layer in range(n_layers):
         if universal_probe:
-            probe_config = f"{probe}_universal_{n_ckpt}{ckpt}_layer{layer}"
+            probe_config = f"{probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
             rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
             linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
             rfm_probe = torch.load(rfm_probe_path, weights_only=False)
             state = torch.load(linear_probe_path, weights_only=False)
             linear_probe_beta, linear_probe_bias = state['beta'], state['bias']            
-        for step in range(n_ckpt):
+        for step in range(n_ckpts):
             if not universal_probe:
-                probe_config = f"{probe}_step{step}_{n_ckpt}{ckpt}_layer{layer}"
+                probe_config = f"{probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
                 rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
                 linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")                
                 rfm_probe = torch.load(rfm_probe_path, weights_only=False)
