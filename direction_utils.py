@@ -620,15 +620,16 @@ def train_logistic_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=Fal
             best_C = C
 
     print(f'Logistic probe {tuning_metric}: {best_score}, C: {best_C}')
-
+    best_beta = best_beta.to(train_X.device).float()
+    best_bias = best_bias.to(train_X.device).float()
     if use_bias:
-        line = best_beta.to(train_X.device)
+        line = best_beta
         if num_classes == 1:
             bias = best_bias.item()
         else:
             bias = best_bias
     else:
-        line = best_beta.to(train_X.device)
+        line = best_beta
         bias = 0
         
     return line, bias

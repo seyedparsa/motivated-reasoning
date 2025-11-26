@@ -1233,17 +1233,18 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
             with suppress_output():
                 rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
                 linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-            logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
-            print(f"Logistic probe beta shape: {logistic_probe_beta.shape}, Logistic probe bias: {logistic_probe_bias}")
-                
-                # val_probs = torch.tensor(model.predict_proba(val_X.cpu()))
-                # if num_classes == 1:
-                #     val_probs = val_probs[:,1].reshape(val_y.shape)
+                logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
+            
             torch.save(rfm_probe, rfm_probe_path)            
             torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+            torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
             rfm_val_metrics = compute_prediction_metrics(rfm_probe.predict(val_data), val_y)
-            linear_val_metrics = compute_prediction_metrics(val_data @ linear_probe_beta + linear_probe_bias, val_y)
-            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}, Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}")            
+            linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
+            logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
+            logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
+            linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
+            logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
+            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}, Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}, Logistic Val Acc: {logistic_val_metrics['accuracy']:.4f}, Logistic Val AUC: {logistic_val_metrics['auc']:.4f}")            
         if not universal_probe:
             for step in range(n_ckpt): 
                 probe_config = f"{probe}_step{step}_{n_ckpt}{ckpt}_layer{layer}"
@@ -1257,8 +1258,8 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                 with suppress_output():
                     rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='accuracy')
                     linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')  
-                logistic_probe_beta, logistic_probe_bias = logistic_probe_beta.to(model.device).float(), logistic_probe_bias.to(model.device).float()
+                    logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')  
+                    
                 # print(val_data.dtype, logistic_probe_beta.dtype, logistic_probe_bias.dtype)                
                 # print(linear_probe_beta.dtype, linear_probe_bias.dtype)
                 # print(f"Logistic probe beta shape: {logistic_probe_beta.shape}, Logistic probe bias: {logistic_probe_bias}")
