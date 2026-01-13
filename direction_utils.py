@@ -458,7 +458,7 @@ def aggregate_layers(layer_outputs, train_y, val_y, test_y, agg_model='linear', 
 def train_rfm_probe_on_concept(train_X, train_y, val_X, val_y, 
                                hyperparams, search_space=None, 
                                tuning_metric='auc'):
-    
+    print(f"Training RFM probe on concept with hyperparams: {hyperparams}", flush=True)
     if search_space is None:
         search_space = {
             'regs': [1e-3],
@@ -528,7 +528,7 @@ def train_rfm_probe_on_concept(train_X, train_y, val_X, val_y,
     return best_model
 
 def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False, tuning_metric='auc', device='cuda'):
-
+    print(f"Training linear probe on concept with use_bias: {use_bias}, tuning_metric: {tuning_metric}", flush=True)
     reg_search_space = [1e-4, 1e-3, 1e-2, 1e-1, 1, 1e1]
     
     if use_bias:
@@ -549,15 +549,19 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
             if n>d:
                 XtX = batch_transpose_multiply(X, X)
                 XtY = batch_transpose_multiply(X, train_y)
-                beta = torch.linalg.solve(XtX + reg*torch.eye(X.shape[1]).to(device), XtY)
+                beta = torch.linalg.solve(XtX + reg*torch.eye(X.shape[1]), XtY)
             else:
+                print(f"LSTSQ")
                 X = X.to(device)
                 train_y = train_y.to(device)
                 Xval = Xval.to(device)
 
                 XXt = X@X.T
+                print(f"XXt shape: {XXt.shape}")
                 alpha = torch.linalg.lstsq(XXt + reg*torch.eye(X.shape[0]).to(device), train_y).solution
+                print(f"Alpha shape: {alpha.shape}")
                 beta = X.T@alpha
+                print(f"Beta shape: {beta.shape}")
 
             preds = Xval.to(device) @ beta
             preds_proba = preds_to_proba(preds)
@@ -588,7 +592,7 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
     return line, bias
 
 def train_logistic_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False, num_classes=1, tuning_metric='auc'):
-    
+    print(f"Training logistic probe on concept with use_bias: {use_bias}, num_classes: {num_classes}, tuning_metric: {tuning_metric}", flush=True)
     C_search_space = [1000, 100, 10, 1, 1e-1, 1e-2]
 
     val_y = val_y.cpu()
@@ -602,7 +606,7 @@ def train_logistic_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=Fal
     maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])
     best_score = float('-inf') if maximize_metric else float('inf')
     for C in C_search_space:
-        model = LogisticRegression(fit_intercept=use_bias, max_iter=5000, C=C)
+        model = LogisticRegression(fit_intercept=use_bias, max_iter=2000, C=C)
         model.fit(train_X.cpu(), train_y_flat.cpu())
 
         

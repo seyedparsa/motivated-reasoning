@@ -34,8 +34,8 @@ def preds_to_proba(preds, eps=1e-3, proba_beta=50):
         preds = smooth_clamped(preds)
     else:
         min_preds = preds.min(dim=1, keepdim=True).values
-        max_preds = preds.max(dim=1, keepdim=True).values 
-        preds = (preds - min_preds) / (max_preds - min_preds) # normalize predictions to [0, 1]
+        max_preds = preds.max(dim=1, keepdim=True).values                 
+        preds = (preds - min_preds) / (max_preds - min_preds + 1e-8) # normalize predictions to [0, 1]
         preds = torch.clamp(preds, eps, 1-eps) # clamp predictions to [eps, 1-eps]
         preds /= preds.sum(dim=1, keepdim=True) # normalize predictions to sum to 1
     return preds

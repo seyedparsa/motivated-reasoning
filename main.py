@@ -74,10 +74,23 @@ if __name__ == "__main__":
     split = args.split or ('train' if args.dataset in ['aqua', 'commonsense_qa'] else 'test')
     reason_first = args.reason_first or (args.bias in ['expert', 'metadata'])
 
+    if args.dataset == 'mmlu':    
+        args.n_questions = 3200
+        args.n_test_questions = 800
+    elif args.dataset == 'aqua':
+        args.n_questions = 3200
+        args.n_test_questions = 800
+    elif args.dataset == 'commonsense_qa':
+        args.n_questions = 3200
+        args.n_test_questions = 800
+    elif args.dataset == 'arc-challenge':
+        args.n_questions = 800
+        args.n_test_questions = 200
+
     if args.generate:
         generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, args.n_questions, args.bs_gen)
     if args.evaluate:
-        evaluate_responses(args.model, args.dataset, split)    
+        evaluate_responses(args.model, args.dataset, split)
     if args.train_probes:
         train_probes(args.model, args.dataset, split, args.n_questions, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, args.bs_probe)
     if args.evaluate_probes:

@@ -1,3 +1,4 @@
+from typing import Any
 import numpy as np
 from itertools import product
 import torch
@@ -673,6 +674,9 @@ def evaluate_responses(model_name, dataset_name, split):
     all_self_biased_answers = [[] for _ in range(n_choices)]
     all_expert_biased_answers = [[] for _ in range(n_choices)]
     all_meta_biased_answers = [[] for _ in range(n_choices)]
+    all_self_biased_mentions = [[] for _ in range(n_choices)]
+    all_expert_biased_mentions = [[] for _ in range(n_choices)]
+    all_meta_biased_mentions = [[] for _ in range(n_choices)]
     ignore = 0
     # Data collection for CSV
     csv_data = []
@@ -739,6 +743,12 @@ def evaluate_responses(model_name, dataset_name, split):
             all_expert_biased_answers[h_idx].append(ans)
         for h_idx, ans in enumerate(meta_biased_answers):
             all_meta_biased_answers[h_idx].append(ans)
+        for h_idx, mention in enumerate(self_biased_mentions):
+            all_self_biased_mentions[h_idx].append(bool(mention))
+        for h_idx, mention in enumerate(expert_biased_mentions):
+            all_expert_biased_mentions[h_idx].append(bool(mention))
+        for h_idx, mention in enumerate(meta_biased_mentions):
+            all_meta_biased_mentions[h_idx].append(bool(mention))
         # print(f"Question {i+1}:")
         # print(f"Correct Answer: {correct_answer}")
         # print(f"Reason First Answer: {rf_answer}")
@@ -764,14 +774,14 @@ def evaluate_responses(model_name, dataset_name, split):
     print(f"Ignored {ignore} out of {n_questions} questions due to no extracted answer in RF.")    
     
     # Save data to CSV
-    if csv_data:
-        csv_filename = f"evaluation_results_{model_name}_{dataset_name}_{split}.csv"
-        csv_path = os.path.join("outputs", csv_filename)
-        os.makedirs("outputs", exist_ok=True)
+    # if csv_data:
+    #     csv_filename = f"evaluation_results_{model_name}_{dataset_name}_{split}.csv"
+    #     csv_path = os.path.join("outputs", csv_filename)
+    #     os.makedirs("outputs", exist_ok=True)
         
-        df = pd.DataFrame(csv_data)
-        df.to_csv(csv_path, index=False)
-        print(f"Saved evaluation data to {csv_path}")     
+    #     df = pd.DataFrame(csv_data)
+    #     df.to_csv(csv_path, index=False)
+    #     print(f"Saved evaluation data to {csv_path}")     
 
 
     # ---- Helpers for Pretty Printing ----
@@ -783,7 +793,8 @@ def evaluate_responses(model_name, dataset_name, split):
                 counts[a] += 1
             else:
                 invalid += 1
-        print(f"Invalid rate: {invalid} out of {len(arr)} ({pct(invalid, len(arr)):.1f}%)")
+        if invalid > 0:
+            print(f"Invalid rate: {invalid} out of {len(arr)} ({pct(invalid, len(arr)):.1f}%)")
         return counts
 
     def pct(num, den):
@@ -970,6 +981,134 @@ def evaluate_responses(model_name, dataset_name, split):
     print_table("Meta-Biased Accuracies", ["Hint","Correct","Total","Pct"], per_hint_acc_rows_meta)
     summary['per_hint_accuracy'] = { 'self': per_hint_acc_self, 'expert': per_hint_acc_exp, 'metadata': per_hint_acc_meta }
 
+    # Hint reaction taxonomy
+    taxonomy_categories = ['motivated','resistant','aligned','departing','shifting','invalid']
+
+    def classify_transition(baseline, hinted_answer, hinted_idx):
+        if not isinstance(hinted_answer, int) or hinted_answer < 0 or hinted_answer >= n_choices:
+            return 'invalid'
+        if baseline == hinted_idx and hinted_answer == hinted_idx:
+            return 'aligned'
+        if baseline == hinted_idx and hinted_answer != hinted_idx:
+            return 'departing'
+        if baseline != hinted_idx and hinted_answer == hinted_idx:
+            return 'motivated'
+        if baseline != hinted_idx and hinted_answer == baseline:
+            return 'resistant'
+        return 'shifting'
+
+    def empty_counts():
+        return {cat: 0 for cat in taxonomy_categories}
+
+    def build_taxonomy(biased_answers, mention_flags):
+        taxonomy = {
+            'overall': empty_counts(),
+            'mention': empty_counts(),
+            'no_mention': empty_counts(),
+            'per_hint': []
+        }
+        for h_idx in range(n_choices):
+            per_hint_counts = empty_counts()
+            answers = biased_answers[h_idx]
+            hints_mentions = mention_flags[h_idx] if mention_flags else None
+            for idx, hinted_answer in enumerate(answers):
+                mention_bool = bool(hints_mentions[idx]) if hints_mentions and idx < len(hints_mentions) else False
+                category = classify_transition(rf_answers[idx], hinted_answer, h_idx)
+                per_hint_counts[category] += 1
+                taxonomy['overall'][category] += 1
+                subset_key = 'mention' if mention_bool else 'no_mention'
+                taxonomy[subset_key][category] += 1
+            taxonomy['per_hint'].append(per_hint_counts)
+        taxonomy['total'] = sum(taxonomy['overall'].values())
+        taxonomy['mention_total'] = sum(taxonomy['mention'].values())
+        taxonomy['no_mention_total'] = sum(taxonomy['no_mention'].values())
+        return taxonomy
+
+    taxonomy_self = build_taxonomy(all_self_biased_answers, all_self_biased_mentions)
+    taxonomy_expert = build_taxonomy(all_expert_biased_answers, all_expert_biased_mentions)
+    taxonomy_meta = build_taxonomy(all_meta_biased_answers, all_meta_biased_mentions)
+
+    def taxonomy_row(label, taxonomy_data):
+        total = taxonomy_data['total']
+        row = [label, total]
+        for cat in taxonomy_categories:
+            cnt = taxonomy_data['overall'][cat]
+            row.append(f"{cnt} ({pct(cnt, total):.1f}%)")
+        return row
+
+    taxonomy_headers = ["Hint Type","Total"] + [cat.title() for cat in taxonomy_categories]
+    taxonomy_rows = [
+        taxonomy_row("Self", taxonomy_self),
+        taxonomy_row("Expert", taxonomy_expert),
+        taxonomy_row("Metadata", taxonomy_meta)
+    ]
+    print_table("Hint Reaction Taxonomy (Overall)", taxonomy_headers, taxonomy_rows)
+
+    def taxonomy_combined_row(label, data):
+        total = data['total']
+        row = [label, total]
+        for cat in taxonomy_categories:
+            overall_cnt = data['overall'][cat]
+            mention_cnt = data['mention'][cat]
+            no_mention_cnt = data['no_mention'][cat]
+            total_for_cat = mention_cnt + no_mention_cnt
+            mention_pct = pct(mention_cnt, total_for_cat) if total_for_cat > 0 else 0.0
+            row.append(f"{overall_cnt} ({pct(overall_cnt, total):.1f}%), {mention_pct:.1f}%")
+        return row
+
+    taxonomy_subset_headers = ["Hint Type","Total"] + [cat.title() for cat in taxonomy_categories]
+    taxonomy_subset_rows = []
+    for label, data in [("Self", taxonomy_self), ("Expert", taxonomy_expert), ("Metadata", taxonomy_meta)]:
+        taxonomy_subset_rows.append(taxonomy_combined_row(label, data))
+    print_table("Hint Reaction Taxonomy by Hint Mention", taxonomy_subset_headers, taxonomy_subset_rows)
+
+    summary['taxonomy'] = { 'self': taxonomy_self, 'expert': taxonomy_expert, 'metadata': taxonomy_meta }
+
+    # Persist taxonomy metrics for aggregation/plotting
+    taxonomy_records = []
+
+    def add_taxonomy_subset(bias_label, subset_name, counts, total, hint_choice=None):
+        hint_value = hint_choice if hint_choice is not None else "ALL"
+        total = total if total is not None else sum(counts.values())
+        for cat in taxonomy_categories:
+            cnt = counts.get(cat, 0)
+            pct_value = round(100 * cnt / total, 4) if total else 0.0
+            taxonomy_records.append(
+                {
+                    "model": model_name,
+                    "dataset": dataset_name,
+                    "bias_type": bias_label,
+                    "subset": subset_name,
+                    "hint_choice": hint_value,
+                    "category": cat,
+                    "count": cnt,
+                    "total": total,
+                    "percentage": pct_value,
+                }
+            )
+
+    def collect_taxonomy_records(label, taxonomy_data):
+        add_taxonomy_subset(label, "overall", taxonomy_data['overall'], taxonomy_data.get('total'))
+        add_taxonomy_subset(label, "mention", taxonomy_data['mention'], taxonomy_data.get('mention_total'))
+        add_taxonomy_subset(label, "no_mention", taxonomy_data['no_mention'], taxonomy_data.get('no_mention_total'))
+        for idx, per_counts in enumerate(taxonomy_data.get('per_hint', [])):
+            hint_choice = valid_choices[idx] if idx < len(valid_choices) else f"hint_{idx}"
+            add_taxonomy_subset(label, "per_hint", per_counts, sum(per_counts.values()), hint_choice=hint_choice)
+
+    collect_taxonomy_records("self", taxonomy_self)
+    collect_taxonomy_records("expert", taxonomy_expert)
+    collect_taxonomy_records("metadata", taxonomy_meta)
+
+    taxonomy_csv_path = None
+    if taxonomy_records:
+        taxonomy_dir = os.path.join("outputs", "taxonomy_metrics")
+        os.makedirs(taxonomy_dir, exist_ok=True)
+        file_tag = f"{model_name}_{dataset_name}".replace("/", "-")
+        taxonomy_csv_path = os.path.join(taxonomy_dir, f"taxonomy_{file_tag}.csv")
+        pd.DataFrame(taxonomy_records).to_csv(taxonomy_csv_path, index=False)
+        print(f"Saved taxonomy metrics to {taxonomy_csv_path}")
+        summary['taxonomy_csv'] = taxonomy_csv_path
+
     # Stick vs change (AF initial -> final)
     if af_initial_answers:
         sticks = sum(1 for init, final in zip(af_initial_answers, af_final_answers) if init == final)
@@ -1049,7 +1188,7 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
             raise NotImplementedError("Own and GT detection not implemented yet.")
         elif probe == 'bias':
             for h, biased_example in enumerate(biased_examples):
-                if balanced or (biased_example['model_answer'] != h and not cot_mentions_hint_keyword(biased_example, tokenizer)):
+                if balanced or (not cot_mentions_hint_keyword(biased_example, tokenizer)):
                     question_examples.append((biased_example, h))                    
         elif probe == 'has-switched':        
             redundants = []          
@@ -1121,7 +1260,16 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt='rel
     model.eval()
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
-    for start in tqdm(range(0, len(full_sequences), batch_size)):
+    total_batches = (len(full_sequences) + batch_size - 1) // batch_size
+    print(f"Extracting hidden states: {len(full_sequences)} examples, {total_batches} batches")
+    last_logged_percent = -1
+    for batch_idx, start in enumerate(tqdm(range(0, len(full_sequences), batch_size))):
+        # Log progress every 10% or every 50 batches
+        current_percent = int(100 * (batch_idx + 1) / total_batches)
+        if current_percent >= last_logged_percent + 10 or (batch_idx + 1) % 50 == 0 or batch_idx == 0:
+            examples_processed = min(start + batch_size, len(full_sequences))
+            print(f"Hidden state extraction: {examples_processed}/{len(full_sequences)} examples ({current_percent}%), batch {batch_idx + 1}/{total_batches}")
+            last_logged_percent = current_percent
         batch_seqs = full_sequences[start:start + batch_size]
         max_len = max(len(s) for s in batch_seqs)
         pad_id = tokenizer.pad_token_id
@@ -1152,6 +1300,7 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt='rel
             hidden_states.append(per_layer)
         del outputs, hs_tuple, batch_ids, attn_masks
         torch.cuda.empty_cache()
+    print(f"Hidden state extraction completed: {len(full_sequences)} examples processed")
     return hidden_states  # list over examples -> list over layers -> tensor(n_ckpt, hidden_size)
 
 
@@ -1174,7 +1323,11 @@ def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, devic
         y = torch.cat(y_layers, dim=0)    
         # X = torch.cat([hidden_states[i][layer] for i in indices], dim=0).float()
         # y = torch.cat([torch.tensor([labels[i]] * n_ckpt, dtype=torch.long) for i in indices], dim=0)
+    # if n_choices > 2:
     y = torch.nn.functional.one_hot(y, num_classes=n_choices).float()
+    # else:
+    #     y = y.unsqueeze(1).float()
+    #     print(f"y shape: {y.shape}")
     if device is not None:
         X, y = X.to(device), y.to(device)        
     return X, y
@@ -1217,69 +1370,117 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
             'n_components' : 5
         }   
     rfm_search_space = {
-            'regs': [1e-4, 3e-4, 1e-3, 3e-3, 1e-2],
+            # 'regs': [1e-4, 3e-4, 1e-3, 3e-3, 1e-2],
+            'regs': [1e-4, 1e-3, 1e-2],
             # 'regs': [1e-3],
             'bws': [1, 10, 100],
             'center_grads': [True, False]
         }     
-    
-    for layer in range(n_layers):  
+        
+    n_layers_to_probe = 5
+    if n_layers <= n_layers_to_probe:
+        layers = list(range(n_layers))
+    else:        
+        layers = np.linspace(1, n_layers - 1, n_layers_to_probe, dtype=int).tolist()
+        # include the first three layers and last three layers as well
+        layers = [0, 1, 2] + layers + [n_layers - 1, n_layers - 2, n_layers - 3]
+        layers = list(set(layers))
+        layers.sort()
+    print(f"Layers to probe: {layers}")
+
+    for layer in layers:  
         if universal_probe:
             probe_config = f"{probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
             rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
             linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
+            logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
             train_data, train_y = extract_Xy(hidden_states, labels, train_indices, layer=layer, device=model.device)
             val_data, val_y = extract_Xy(hidden_states, labels, val_indices, layer=layer, device=model.device)
             if layer == 0:
                 print(f"Train data shape: {train_data.shape, train_y.shape}, Val data shape: {val_data.shape, val_y.shape}")            
-            with suppress_output():
-                rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
-                linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
-            
-            torch.save(rfm_probe, rfm_probe_path)            
-            torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-            torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+            print(f"Layer {layer}: Training/loading universal probes...")
+            # with suppress_output():
+            if True:
+                try:
+                    rfm_probe = torch.load(rfm_probe_path, weights_only=False)
+                    print(f"RFM probe loaded from {rfm_probe_path}")
+                except FileNotFoundError:
+                    rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
+                    torch.save(rfm_probe, rfm_probe_path)   
+                    print(f"RFM probe saved to {rfm_probe_path}")
+                try:
+                    state = torch.load(linear_probe_path, weights_only=False)
+                    linear_probe_beta, linear_probe_bias = state['beta'], state['bias']                              
+                    print(f"Linear probe loaded from {linear_probe_path}")
+                except FileNotFoundError:
+                    linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                    torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                    print(f"Linear probe saved to {linear_probe_path}")
+                try:
+                    state = torch.load(logistic_probe_path, weights_only=False)
+                    logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                    print(f"Logistic probe loaded from {logistic_probe_path}")
+                except FileNotFoundError:
+                    logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
+                    torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+                    print(f"Logistic probe saved to {logistic_probe_path}")
+            print(f"Layer {layer}: Universal probes ready, computing metrics...")
             rfm_val_metrics = compute_prediction_metrics(rfm_probe.predict(val_data), val_y)
             linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
-            logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
-            logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
             linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
+            logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
+            logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
             logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
-            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}, Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}, Logistic Val Acc: {logistic_val_metrics['accuracy']:.4f}, Logistic Val AUC: {logistic_val_metrics['auc']:.4f}")            
-        if not universal_probe:
-            for step in range(n_ckpts): 
+            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Logistic Val Acc: {logistic_val_metrics['accuracy']:.4f}")
+            print(f"Layer {layer}: RFM Val AUC: {rfm_val_metrics['auc']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}, Logistic Val AUC: {logistic_val_metrics['auc']:.4f}")
+        for step in range(n_ckpts): 
+            val_data, val_y = extract_Xy(hidden_states, labels, val_indices, layer=layer, step=step, device=model.device)
+            if not universal_probe:            
                 probe_config = f"{probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
                 rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
                 linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")                
                 logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
-                train_data, train_y = extract_Xy(hidden_states, labels, train_indices, layer=layer, step=step, device=model.device)
-                val_data, val_y = extract_Xy(hidden_states, labels, val_indices, layer=layer, step=step, device=model.device)
-                if layer == 0 and step == 0:
-                    print(f"Train data shape: {train_data.shape, train_y.shape}, Val data shape: {val_data.shape, val_y.shape}")            
-                with suppress_output():
-                    rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='accuracy')
-                    linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                    logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')  
-                    
-                # print(val_data.dtype, logistic_probe_beta.dtype, logistic_probe_bias.dtype)                
-                # print(linear_probe_beta.dtype, linear_probe_bias.dtype)
-                # print(f"Logistic probe beta shape: {logistic_probe_beta.shape}, Logistic probe bias: {logistic_probe_bias}")
+                train_data, train_y = extract_Xy(hidden_states, labels, train_indices, layer=layer, step=step, device=model.device)                
+                # if layer == 0 and step == 0:
+                print(f"Train data shape: {train_data.shape, train_y.shape}, Val data shape: {val_data.shape, val_y.shape}")            
+                print(f"Layer {layer}, Step {step}: Training/loading probes...")            
+                try:
+                    rfm_probe = torch.load(rfm_probe_path, weights_only=False)
+                    print(f"RFM probe loaded from {rfm_probe_path}")
+                except FileNotFoundError:
+                    with suppress_output():
+                        rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='accuracy')
+                    torch.save(rfm_probe, rfm_probe_path)
+                    print(f"RFM probe saved to {rfm_probe_path}")
+                    torch.save(rfm_probe, rfm_probe_path)
+                # try:
+                #     state = torch.load(linear_probe_path, weights_only=False)
+                #     linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
+                #     print(f"Linear probe loaded from {linear_probe_path}")
+                # except FileNotFoundError:
+                #     linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                #     torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                #     print(f"Linear probe saved to {linear_probe_path}")
+                # try:
+                #     state = torch.load(logistic_probe_path, weights_only=False)
+                #     logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                #     print(f"Logistic probe loaded from {logistic_probe_path}")
+                # except FileNotFoundError:
+                #     logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
+                #     torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+                #     print(f"Logistic probe saved to {logistic_probe_path}")
+                print(f"Layer {layer}, Step {step}: Probes ready, computing metrics...")
+            rfm_preds = rfm_probe.predict(val_data)
+            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
+            # logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
+            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
+            rfm_val_metrics = compute_prediction_metrics(rfm_preds, val_y)
+            # linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
+            # logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
+            # print(f"Layer {layer}, Step {step}: RFM Acc: {rfm_val_metrics['accuracy']:.4f}, Linear Acc: {linear_val_metrics['accuracy']:.4f}, Logistic Acc: {logistic_val_metrics['accuracy']:.4f}")
+            # print(f"Layer {layer}, Step {step}: RFM AUC: {rfm_val_metrics['auc']:.4f}, Linear AUC: {linear_val_metrics['auc']:.4f}, Logistic AUC: {logistic_val_metrics['auc']:.4f}")
+            print(f"Layer {layer}, Step {step}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
 
-                torch.save(rfm_probe, rfm_probe_path)
-                torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-                torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
-                rfm_preds = rfm_probe.predict(val_data)
-                linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
-                # linear_preds_proba = preds_to_proba(linear_preds)
-                logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
-                logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
-                rfm_val_metrics = compute_prediction_metrics(rfm_preds, val_y)
-                linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
-                logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
-                print(f"Validation: Layer {layer}, Step {step}: RFM Acc: {rfm_val_metrics['accuracy']:.4f}, Linear Acc: {linear_val_metrics['accuracy']:.4f}, Logistic Acc: {logistic_val_metrics['accuracy']:.4f}")
-                print(f"Validation: Layer {layer}, Step {step}: RFM AUC: {rfm_val_metrics['auc']:.4f}, Linear AUC: {linear_val_metrics['auc']:.4f}, Logistic AUC: {logistic_val_metrics['auc']:.4f}")
-   
 
 def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
     model, tokenizer = get_model(model_name)
@@ -1299,52 +1500,87 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
     probe_env = f"{model_name}_{dataset_name}-{split}-{n_questions}_{bias}-biased_{'balanced' if balanced else 'unbalanced'}"    
     probes_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "probes", probe_env)
     n_layers = len(hidden_states[0])
+    results_rows = []
+    bias_tag = bias or "none"
+    probe_tag = probe or "none"
+    split_tag = split or "unspecified"
+    run_scope = "universal" if universal_probe else "per-step"
+    csv_tag = f"{model_name}_{dataset_name}_{split_tag}_{bias_tag}_{probe_tag}_{run_scope}_{n_ckpts}{ckpt}"
+    csv_tag = csv_tag.replace("/", "-")
+    outputs_dir = os.path.join("outputs", "probe_metrics")
     for layer in range(n_layers):
         if universal_probe:
             probe_config = f"{probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
             rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
             linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
-            rfm_probe = torch.load(rfm_probe_path, weights_only=False)
-            state = torch.load(linear_probe_path, weights_only=False)
-            linear_probe_beta, linear_probe_bias = state['beta'], state['bias']            
+            logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
+            try:
+                rfm_probe = torch.load(rfm_probe_path, weights_only=False)
+            except FileNotFoundError:
+                print(f"RFM probe not found for layer {layer}")
+                continue                        
+            # state = torch.load(linear_probe_path, weights_only=False)
+            # linear_probe_beta, linear_probe_bias = state['beta'], state['bias']          
+            # state = torch.load(logistic_probe_path, weights_only=False)
+            # logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
         for step in range(n_ckpts):
             if not universal_probe:
                 probe_config = f"{probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
                 rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
-                linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")                
-                rfm_probe = torch.load(rfm_probe_path, weights_only=False)
-                state = torch.load(linear_probe_path, weights_only=False)
-                linear_probe_beta, linear_probe_bias = state['beta'], state['bias']            
+                linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")  
+                logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
+                try:
+                    rfm_probe = torch.load(rfm_probe_path, weights_only=False)
+                except FileNotFoundError:                    
+                    print(f"RFM probe not found for layer {layer}, step {step}")
+                    continue
+                # state = torch.load(linear_probe_path, weights_only=False)
+                # linear_probe_beta, linear_probe_bias = state['beta'], state['bias']          
+                # state = torch.load(logistic_probe_path, weights_only=False)
+                # logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
             test_data, test_y = extract_Xy(hidden_states, labels, layer=layer, step=step, device=model.device)
-            rfm_test_metrics = compute_prediction_metrics(rfm_probe.predict(test_data), test_y)
-            linear_test_metrics = compute_prediction_metrics(test_data @ linear_probe_beta + linear_probe_bias, test_y)
-            print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}, RFM Test AUC: {rfm_test_metrics['auc']:.4f}, Linear Test Acc: {linear_test_metrics['accuracy']:.4f}, Linear Test AUC: {linear_test_metrics['auc']:.4f}")            
+            rfm_preds = rfm_probe.predict(test_data)
+            # linear_preds = test_data @ linear_probe_beta + linear_probe_bias
+            # logistic_logits = test_data @ logistic_probe_beta + logistic_probe_bias
+            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
+            rfm_test_metrics = compute_prediction_metrics(rfm_preds, test_y)
+            # linear_test_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), test_y)
+            # logistic_test_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), test_y)
+            # print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}, Linear Test Acc: {linear_test_metrics['accuracy']:.4f}, Logistic Test Acc: {logistic_test_metrics['accuracy']:.4f}")
+            # print(f"Layer {layer}, Step {step}: RFM Test AUC: {rfm_test_metrics['auc']:.4f}, Linear Test AUC: {linear_test_metrics['auc']:.4f}, Logistic Test AUC: {logistic_test_metrics['auc']:.4f}")
+            print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}")
+            print(f"Layer {layer}, Step {step}: RFM Test AUC: {rfm_test_metrics['auc']:.4f}")
+            test_examples = int(test_y.shape[0]) if hasattr(test_y, "shape") else len(test_y)
+            results_rows.append(
+                {
+                    "model": model_name,
+                    "dataset": dataset_name,
+                    "split": split_tag,
+                    "bias": bias_tag,
+                    "probe": probe_tag,
+                    "probe_env": probe_env,
+                    "rfm_probe_path": rfm_probe_path,
+                    "universal_probe": universal_probe,
+                    "layer": layer,
+                    "step": step,
+                    "n_ckpts": n_ckpts,
+                    "ckpt_mode": ckpt,
+                    "balanced": balanced,
+                    "n_questions": n_questions,
+                    "n_test_questions": n_test_questions,
+                    "test_examples": test_examples,
+                    "rfm_accuracy": rfm_test_metrics.get("accuracy"),
+                    "rfm_auc": rfm_test_metrics.get("auc"),
+                }
+            )
 
-    #         test_accuracy_rows.append({
-    #             'layer': layer,
-    #             'step': step,
-    #             'rfm_accuracy': rfm_test_acc,
-    #             'linear_accuracy': linear_test_acc,
-    #             'rfm_auc': rfm_test_auc,
-    #         })
-
-            
-    # # Save results to CSV
-    # if test_accuracy_rows:
-    #     df = pd.DataFrame(test_accuracy_rows)
-    #     file_name = f"paired_probe_results_{model_name}_{dataset_name}_{split}_{bias}_{probe}_{'universal' if universal_probe else 'specific'}_{'balanced' if balanced else 'unbalanced'}_{n_ckpt}{ckpt}"
-    #     output_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "outputs")
-    #     os.makedirs(output_dir, exist_ok=True)
-    #     csv_path = os.path.join(output_dir, f"{file_name}.csv")
-    #     df.to_csv(csv_path, index=False)
-    #     print(f"Saved probe results to {csv_path}")
-        
-    #     # Print summary statistics
-    #     print(f"Results summary:")
-    #     print(f"  Layers tested: {df['layer'].nunique()}")
-    #     print(f"  Steps per layer: {df['step'].nunique()}")
-    #     print(f"  Average accuracy: {df['rfm_accuracy'].mean():.4f}")
-    #     print(f"  Average AUC: {df['rfm_auc'].mean():.4f}")
-    #     print(f"  Best accuracy: {df['rfm_accuracy'].max():.4f} (layer {df.loc[df['rfm_accuracy'].idxmax(), 'layer']}, step {df.loc[df['rfm_accuracy'].idxmax(), 'step']})")
-    #     print(f"  Best AUC: {df['rfm_auc'].max():.4f} (layer {df.loc[df['rfm_auc'].idxmax(), 'layer']}, step {df.loc[df['rfm_auc'].idxmax(), 'step']})")
-        
+    csv_path = None
+    if results_rows:
+        os.makedirs(outputs_dir, exist_ok=True)
+        df = pd.DataFrame(results_rows)
+        df.sort_values(["layer", "step"], inplace=True)
+        csv_filename = f"probe_metrics_{csv_tag}.csv"
+        csv_path = os.path.join(outputs_dir, csv_filename)
+        df.to_csv(csv_path, index=False)
+        print(f"Saved probe metrics to {csv_path}")
+    return csv_path
