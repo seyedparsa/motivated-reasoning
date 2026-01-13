@@ -29,3 +29,21 @@ directions_for_v2_paper/
 notebooks/reviews.ipynb
 notebooks/politics.ipynb
 notebooks/harmful.ipynb
+
+# Shell helper scripts
+run_*.sh
+submit_*.sh
+report_progress.sh
+
+# Archives and bundles
+bias_probe_files.zip
+has_switched_files.zip
+will_switch_files.zip
+outputs.zip
+outputs_bias_files.zip
+outputs_has-switched_files.zip
+outputs_will-switch_files.zip
+
+# Generated outputs
+outputs/
+old_outputs/
