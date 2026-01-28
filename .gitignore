@@ -47,3 +47,12 @@ outputs_will-switch_files.zip
 # Generated outputs
 outputs/
 old_outputs/
+
+# Job output files
+*.err
+*.out
+
+# Config and docs
+main.pdf
+simons.yml
+simons_local.yml

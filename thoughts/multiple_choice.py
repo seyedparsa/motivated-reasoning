@@ -1452,34 +1452,21 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                         rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='accuracy')
                     torch.save(rfm_probe, rfm_probe_path)
                     print(f"RFM probe saved to {rfm_probe_path}")
-                    torch.save(rfm_probe, rfm_probe_path)
-                # try:
-                #     state = torch.load(linear_probe_path, weights_only=False)
-                #     linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
-                #     print(f"Linear probe loaded from {linear_probe_path}")
-                # except FileNotFoundError:
-                #     linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                #     torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-                #     print(f"Linear probe saved to {linear_probe_path}")
-                # try:
-                #     state = torch.load(logistic_probe_path, weights_only=False)
-                #     logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
-                #     print(f"Logistic probe loaded from {logistic_probe_path}")
-                # except FileNotFoundError:
-                #     logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
-                #     torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
-                #     print(f"Logistic probe saved to {logistic_probe_path}")
+                try:
+                    state = torch.load(linear_probe_path, weights_only=False)
+                    linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
+                    print(f"Linear probe loaded from {linear_probe_path}")
+                except FileNotFoundError:
+                    linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                    torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                    print(f"Linear probe saved to {linear_probe_path}")
                 print(f"Layer {layer}, Step {step}: Probes ready, computing metrics...")
             rfm_preds = rfm_probe.predict(val_data)
-            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
-            # logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
-            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
+            linear_preds = val_data @ linear_probe_beta + linear_probe_bias
             rfm_val_metrics = compute_prediction_metrics(rfm_preds, val_y)
-            # linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
-            # logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
-            # print(f"Layer {layer}, Step {step}: RFM Acc: {rfm_val_metrics['accuracy']:.4f}, Linear Acc: {linear_val_metrics['accuracy']:.4f}, Logistic Acc: {logistic_val_metrics['accuracy']:.4f}")
-            # print(f"Layer {layer}, Step {step}: RFM AUC: {rfm_val_metrics['auc']:.4f}, Linear AUC: {linear_val_metrics['auc']:.4f}, Logistic AUC: {logistic_val_metrics['auc']:.4f}")
+            linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
             print(f"Layer {layer}, Step {step}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
+            print(f"Layer {layer}, Step {step}: Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}")
 
 
 def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
@@ -1518,38 +1505,41 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 rfm_probe = torch.load(rfm_probe_path, weights_only=False)
             except FileNotFoundError:
                 print(f"RFM probe not found for layer {layer}")
-                continue                        
-            # state = torch.load(linear_probe_path, weights_only=False)
-            # linear_probe_beta, linear_probe_bias = state['beta'], state['bias']          
-            # state = torch.load(logistic_probe_path, weights_only=False)
-            # logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                continue
+            try:
+                state = torch.load(linear_probe_path, weights_only=False)
+                linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
+            except FileNotFoundError:
+                print(f"Linear probe not found for layer {layer}")
+                linear_probe_beta, linear_probe_bias = None, None
         for step in range(n_ckpts):
             if not universal_probe:
                 probe_config = f"{probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
                 rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
-                linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")  
+                linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
                 logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
                 try:
                     rfm_probe = torch.load(rfm_probe_path, weights_only=False)
-                except FileNotFoundError:                    
+                except FileNotFoundError:
                     print(f"RFM probe not found for layer {layer}, step {step}")
                     continue
-                # state = torch.load(linear_probe_path, weights_only=False)
-                # linear_probe_beta, linear_probe_bias = state['beta'], state['bias']          
-                # state = torch.load(logistic_probe_path, weights_only=False)
-                # logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                try:
+                    state = torch.load(linear_probe_path, weights_only=False)
+                    linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
+                except FileNotFoundError:
+                    print(f"Linear probe not found for layer {layer}, step {step}")
+                    linear_probe_beta, linear_probe_bias = None, None
             test_data, test_y = extract_Xy(hidden_states, labels, layer=layer, step=step, device=model.device)
             rfm_preds = rfm_probe.predict(test_data)
-            # linear_preds = test_data @ linear_probe_beta + linear_probe_bias
-            # logistic_logits = test_data @ logistic_probe_beta + logistic_probe_bias
-            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)
             rfm_test_metrics = compute_prediction_metrics(rfm_preds, test_y)
-            # linear_test_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), test_y)
-            # logistic_test_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), test_y)
-            # print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}, Linear Test Acc: {linear_test_metrics['accuracy']:.4f}, Logistic Test Acc: {logistic_test_metrics['accuracy']:.4f}")
-            # print(f"Layer {layer}, Step {step}: RFM Test AUC: {rfm_test_metrics['auc']:.4f}, Linear Test AUC: {linear_test_metrics['auc']:.4f}, Logistic Test AUC: {logistic_test_metrics['auc']:.4f}")
             print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}")
             print(f"Layer {layer}, Step {step}: RFM Test AUC: {rfm_test_metrics['auc']:.4f}")
+            linear_test_metrics = {'accuracy': None, 'auc': None}
+            if linear_probe_beta is not None:
+                linear_preds = test_data @ linear_probe_beta + linear_probe_bias
+                linear_test_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), test_y)
+                print(f"Layer {layer}, Step {step}: Linear Test Acc: {linear_test_metrics['accuracy']:.4f}")
+                print(f"Layer {layer}, Step {step}: Linear Test AUC: {linear_test_metrics['auc']:.4f}")
             test_examples = int(test_y.shape[0]) if hasattr(test_y, "shape") else len(test_y)
             results_rows.append(
                 {
@@ -1571,6 +1561,8 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                     "test_examples": test_examples,
                     "rfm_accuracy": rfm_test_metrics.get("accuracy"),
                     "rfm_auc": rfm_test_metrics.get("auc"),
+                    "linear_accuracy": linear_test_metrics.get("accuracy"),
+                    "linear_auc": linear_test_metrics.get("auc"),
                 }
             )
 
