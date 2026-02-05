@@ -542,6 +542,7 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
     num_classes = train_y.shape[1]
 
     best_beta = None
+    best_reg = None
     maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])
     best_score = float('-inf') if maximize_metric else float('inf')
     for reg in reg_search_space:
@@ -549,7 +550,7 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
             if n>d:
                 XtX = batch_transpose_multiply(X, X)
                 XtY = batch_transpose_multiply(X, train_y)
-                beta = torch.linalg.solve(XtX + reg*torch.eye(X.shape[1]), XtY)
+                beta = torch.linalg.solve(XtX + reg*torch.eye(X.shape[1], device=X.device), XtY)
             else:
                 print(f"LSTSQ")
                 X = X.to(device)
@@ -578,6 +579,9 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
             continue
     
     print(f'Linear probe {tuning_metric}: {best_score}, reg: {best_reg}')
+
+    if best_reg is None:
+        raise ValueError("Linear probe training failed: no valid regularization found")
 
     if use_bias:
         line = best_beta[:-1].to(train_X.device)

@@ -13,6 +13,17 @@ from typing import Dict, List
 import matplotlib.pyplot as plt
 import pandas as pd
 
+# Set larger font sizes
+plt.rcParams.update({
+    'font.size': 14,
+    'axes.titlesize': 18,
+    'axes.labelsize': 16,
+    'xtick.labelsize': 14,
+    'ytick.labelsize': 14,
+    'legend.fontsize': 12,
+    'legend.title_fontsize': 14,
+})
+
 
 METRICS_DIR = Path("outputs/probe_metrics")
 OUTPUT_DIR = Path("figures/bias_detection")
@@ -32,14 +43,20 @@ MODEL_LABELS = {
 }
 MODEL_ORDER = ["qwen-3-8b", "llama-3.1-8b", "gemma-3-4b"]
 MODEL_COLORS = {
-    "qwen-3-8b": "#7A37FF",      # Qwen purple
-    "llama-3.1-8b": "#FD1D1D",   # Instagram red
-    "gemma-3-4b": "#FBC02D",     # Google yellow
+    "qwen-3-8b": "#8856a7",      # Qwen purple
+    "llama-3.1-8b": "#e34a33",   # Llama red
+    "gemma-3-4b": "#f4c20d",     # Gemma yellow
 }
 
 
 def load_best_auc_per_model(metrics_dir: Path, task: str = "bias", step_mode: str = "last") -> pd.DataFrame:
-    """Load all bias probe csvs and grab the best layer from the final step per file."""
+    """Load all bias probe csvs and grab the best AUC per file.
+
+    step_mode options:
+      - "best": best AUC across all steps and layers (default)
+      - "first": best AUC from the first step only
+      - "last": best AUC from the last step only
+    """
     records: List[pd.DataFrame] = []
     for path in metrics_dir.glob(f"probe_metrics_*_{task}_per-step_3rel.csv"):
         df = pd.read_csv(path)
@@ -47,9 +64,12 @@ def load_best_auc_per_model(metrics_dir: Path, task: str = "bias", step_mode: st
             continue
         if step_mode == "first":
             step_value = df["step"].min()
-        else:
+            step_df = df[df["step"] == step_value]
+        elif step_mode == "last":
             step_value = df["step"].max()
-        step_df = df[df["step"] == step_value]
+            step_df = df[df["step"] == step_value]
+        else:  # "best" - use all steps
+            step_df = df
         if step_df.empty:
             continue
         best_row = step_df.loc[step_df["rfm_auc"].idxmax(), ["model", "dataset", "bias", "rfm_auc"]]
@@ -80,9 +100,9 @@ def save_plot(fig, base_name: str, formats: List[str]) -> None:
 def plot_bias_detection(per_model_bias: pd.DataFrame, formats: List[str], suffix: str = "", title: str = "Hint Recovery AUC") -> None:
     bias_categories = BIAS_ORDER
     x = range(len(bias_categories))
-    width = 0.22
+    width = 0.25
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     for idx, model in enumerate(MODEL_ORDER):
         label = MODEL_LABELS.get(model, model)
@@ -95,13 +115,17 @@ def plot_bias_detection(per_model_bias: pd.DataFrame, formats: List[str], suffix
                 & (per_model_bias["bias_label"] == bias)
             ]["rfm_auc"]
             values.append(valiloc(val))
-        ax.bar(offsets, values, width=width, label=label, color=color)
+        bars = ax.bar(offsets, values, width=width, label=label, color=color, edgecolor="black")
+        # Add value labels on top
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                    f"{val:.0%}", ha="center", va="bottom", fontsize=10)
 
     ax.set_xticks([i for i in x])
     ax.set_xticklabels(bias_categories)
     ax.set_ylabel("AUC")
-    ax.set_ylim(0, 1.05)
-    ax.legend(loc="lower right")
+    ax.set_ylim(0, 1.15)
+    ax.legend(title="Model")
     ax.set_title(title)
     fig.tight_layout()
     base_name = f"bias_detection_bias_types{suffix}"
@@ -129,9 +153,9 @@ def aggregate_by_model_dataset(best_auc_df: pd.DataFrame) -> pd.DataFrame:
 def plot_model_dataset(per_combo: pd.DataFrame, formats: List[str], suffix: str = "", title: str = "Hint Recovery AUC") -> None:
     datasets = sorted(per_combo["dataset_label"].unique(), key=lambda d: ["AQUA","ARC-Challenge","CommonsenseQA","MMLU"].index(d) if d in ["AQUA","ARC-Challenge","CommonsenseQA","MMLU"] else d)
     x = range(len(datasets))
-    width = 0.22
+    width = 0.25
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(10, 6))
     for idx, model in enumerate(MODEL_ORDER):
         label = MODEL_LABELS.get(model, model)
         color = MODEL_COLORS.get(model, None)
@@ -142,13 +166,17 @@ def plot_model_dataset(per_combo: pd.DataFrame, formats: List[str], suffix: str 
                 (per_combo["model"] == model) & (per_combo["dataset_label"] == dataset)
             ]["rfm_auc"]
             values.append(valiloc(val))
-        ax.bar(offsets, values, width=width, label=label, color=color)
+        bars = ax.bar(offsets, values, width=width, label=label, color=color, edgecolor="black")
+        # Add value labels on top
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                    f"{val:.0%}", ha="center", va="bottom", fontsize=10)
 
     ax.set_xticks([i for i in x])
     ax.set_xticklabels(datasets)
     ax.set_ylabel("AUC")
-    ax.set_ylim(0, 1.05)
-    ax.legend(loc="lower right")
+    ax.set_ylim(0, 1.15)
+    ax.legend(title="Model")
     ax.set_title(title)
     fig.tight_layout()
     base_name = f"bias_detection_model_dataset{suffix}"

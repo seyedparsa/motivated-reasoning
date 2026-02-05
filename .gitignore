@@ -56,3 +56,16 @@ old_outputs/
 main.pdf
 simons.yml
 simons_local.yml
+
+# Editor and IDE
+.vscode/
+
+# Temporary/scratch files
+base.py
+core
+
+# Screenshots and images
+Screenshot*.png
+
+# Anonymized submission artifacts
+anonymized_submission/
