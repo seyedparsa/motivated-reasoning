@@ -7,46 +7,6 @@ load_dotenv()
 
 from thoughts.multiple_choice import generate_responses, train_probes, evaluate_responses, evaluate_probes, evaluate_llm
 
-    
-
-def plot_accuracy_heatmap(df, title, file_name, x_label="Step into Chain of Thought", y_label="Depth in Model", figsize=(10, 6), cmap="viridis", baseline=0.25):
-    """
-    Plot a heatmap of accuracy from a DataFrame with columns: hidden_layer, gen_step, accuracy.
-    
-    Parameters:
-    - df: pandas DataFrame with 'hidden_layer', 'gen_step', and 'accuracy' columns
-    - title: Title of the plot
-    - x_label: Label for x-axis (default assumes CoT steps)
-    - y_label: Label for y-axis (default assumes model depth)
-    - figsize: Tuple for figure size
-    - cmap: Color map to use (e.g., 'viridis', 'coolwarm')
-    """
-    # Round for clean axis labels
-    df = df.copy()
-    df["layer"] = df["layer"].round(2)
-    df["step"] = df["step"].round(2)
-    
-    # Pivot and sort
-    heatmap_data = df.pivot(index="layer", columns="step", values="auc").sort_index(ascending=False)
-
-    # Plot
-    plt.figure(figsize=figsize)
-    ax = sns.heatmap(
-        heatmap_data,
-        annot=False,
-        fmt=".0f",
-        cmap=cmap,
-        vmin=baseline,
-        vmax=1.0,
-    )
-    plt.title(title)
-    plt.xlabel(x_label)
-    plt.ylabel(y_label)
-    plt.tight_layout()
-    plt.savefig(f"{file_name}.png")
-
-
-
 if __name__ == "__main__":    
     parser = argparse.ArgumentParser(description="Evaluate language models on various tasks")
     parser.add_argument("--model", type=str, required=True)
@@ -60,7 +20,7 @@ if __name__ == "__main__":
     parser.add_argument("--train_probes", action='store_true', help="Train probes")
     parser.add_argument("--evaluate_probes", action='store_true', help="Evaluate probes")
     parser.add_argument("--evaluate_llm", action='store_true', help="Evaluate LLM baseline for has-switched detection")
-    parser.add_argument("--probe", type=str, help="probe type (e.g., 'bias', 'has-switched', 'will-switch')")
+    parser.add_argument("--probe", type=str, help="probe type (e.g., 'hint-recovery', 'mot_vs_alg', 'mot_vs_res', 'mot_vs_oth)")
     parser.add_argument("--llm", type=str, default='gpt-5-nano', help="LLM model for baseline evaluation (e.g., 'gpt-5-nano')")
     # parser.add_argument("--per_layer", action='store_true', help="Train a probe per layer")
     parser.add_argument("--universal", action='store_true', help="Use a universal probe")

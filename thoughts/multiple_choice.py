@@ -1414,7 +1414,7 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
 
     # Load biased datasets; convert to lists when llm tagging is enabled so row edits persist.
     biased_datasets = []
-    llm_field = f"{llm}-detector" if llm else None
+    # llm_field = f"{llm}-detector" if llm else None
     print(f"Loading biased datasets for {model_name} {dataset_name} {split} {bias} {llm}")
     for h in range(n_choices):
         dataset_h = load_data(model_name, dataset_name, split, reason_first=reason_first, bias=bias, hint_idx=h, tag=tag)
@@ -1443,75 +1443,118 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
 
         if probe in ['own', 'gt']:
             raise NotImplementedError("Own and GT detection not implemented yet.")
-        elif probe == 'bias':
+        elif probe == 'hint-recovery':
+            hinted = []
             for h, biased_example in enumerate(biased_examples):
-                if not filter_mentions or balanced or (not cot_mentions_hint_keyword(biased_example, tokenizer)):
-                    question_examples.append((biased_example, h))
-        elif probe == 'has-switched':
-            redundants = []
-            switches = []
-            for h, biased_example in enumerate(biased_examples):
-                if biased_example['model_answer'] != h:
-                    continue
                 if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
                     continue
-                llm_pred = None
-                if llm:
-                    existing = biased_example.get(llm_field)
-                    is_malformed = (
-                        existing is None
-                        or not isinstance(existing.get('confidence'), (int, float))
-                        or existing.get('confidence') == 0.0
-                        or not isinstance(existing.get('is_motivated'), bool)
-                        or not isinstance(existing.get('reasoning'), str)
-                    )
-                    if llm_field not in biased_example or is_malformed:
-                        is_mot, confidence, reasoning = is_motivated_llm(biased_example, bias, h, valid_choices, llm=llm)
-                        llm_pred = {'is_motivated': is_mot, 'confidence': confidence, 'reasoning': reasoning}
-                        biased_datasets[h][i][llm_field] = llm_pred
-                        datasets_modified[h] = True
-                    else:
-                        llm_pred = existing
-
-                if h != rf_example['model_answer']:
-                    switches.append((biased_example, llm_pred))
+                hinted.append((biased_example, h))
+            if not balanced or len(hinted) == len(biased_examples):
+                for ex, h in hinted:
+                    question_examples.append((ex, h))            
+        else:
+            motivated = []
+            aligned = []
+            resistant = []
+            for h, biased_example in enumerate(biased_examples):
+                if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
+                    continue
+                unhinted_answer = rf_example['model_answer']
+                hinted_answer = biased_example['model_answer']
+                if h == unhinted_answer:
+                    if h == hinted_answer:
+                        aligned.append(biased_example)
                 else:
-                    redundants.append((biased_example, llm_pred))
-            if balanced and switches and redundants:
-                switch_example, switch_llm_pred = rng.choice(switches)
-                redundant_example, redundant_llm_pred = rng.choice(redundants)
-                question_examples.append((switch_example, 1, switch_llm_pred))
-                question_examples.append((redundant_example, 0, redundant_llm_pred))
+                    if h == hinted_answer:
+                        motivated.append(biased_example)
+                    elif hinted_answer == unhinted_answer:
+                        resistant.append(biased_example)
+                # llm_pred = None
+                # if llm:
+                #     existing = biased_example.get(llm_field)
+                #     is_malformed = (
+                #         existing is None
+                #         or not isinstance(existing.get('confidence'), (int, float))
+                #         or existing.get('confidence') == 0.0
+                #         or not isinstance(existing.get('is_motivated'), bool)
+                #         or not isinstance(existing.get('reasoning'), str)
+                #     )
+                #     if llm_field not in biased_example or is_malformed:
+                #         is_mot, confidence, reasoning = is_motivated_llm(biased_example, bias, h, valid_choices, llm=llm)
+                #         llm_pred = {'is_motivated': is_mot, 'confidence': confidence, 'reasoning': reasoning}
+                #         biased_datasets[h][i][llm_field] = llm_pred
+                #         datasets_modified[h] = True
+                #     else:
+                #         llm_pred = existing
+
+            if probe == 'mot_vs_alg':
+                non_motivated = aligned
+            elif probe == 'mot_vs_res':
+                non_motivated = resistant
+            elif probe == 'mot_vs_oth':
+                non_motivated = [*aligned, *resistant]
+            
+            if balanced and motivated and non_motivated:
+                motivated_example = rng.choice(motivated)
+                non_motivated_example = rng.choice(non_motivated)
+                question_examples.append((motivated_example, 1))
+                question_examples.append((non_motivated_example, 0))
             elif not balanced:
-                for ex, llm_pred in switches:
-                    question_examples.append((ex, 1, llm_pred))
-                for ex, llm_pred in redundants:
-                    question_examples.append((ex, 0, llm_pred))
-        elif probe == 'will-switch':
-            switches = []
-            aligns = []
-            resists = []
-            for h, biased_example in enumerate(biased_examples):
-                if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
-                    continue
-                if biased_example['model_answer'] == h:
-                    if h != rf_example['model_answer']:
-                        switches.append((biased_example))
-                    else:
-                        aligns.append((biased_example))
-                elif biased_example['model_answer'] == rf_example['model_answer']:
-                    resists.append((biased_example))
-            resists_or_aligns = [*resists , *aligns]
-            if balanced and switches and resists_or_aligns:
-                switch_example = rng.choice(switches)
-                resist_or_align_example = rng.choice(resists_or_aligns)
-                question_examples.append((switch_example, 1))
-                question_examples.append((resist_or_align_example, 0))
-            elif not balanced:
-                for ex in switches:
+                for ex in motivated:
                     question_examples.append((ex, 1))
-                for ex in resists_or_aligns:
+                for ex in non_motivated:
                     question_examples.append((ex, 0))
+
+
+        # if probe == 'has-switched':
+        #     redundants = []
+        #     switches = []
+        #     for h, biased_example in enumerate(biased_examples):
+        #         if biased_example['model_answer'] != h:
+        #             continue
+        #         if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
+        #             continue
+                
+
+        #         if h != rf_example['model_answer']:
+        #             switches.append((biased_example, llm_pred))
+        #         else:
+        #             redundants.append((biased_example, llm_pred))
+        #     if balanced and switches and redundants:
+        #         switch_example, switch_llm_pred = rng.choice(switches)
+        #         redundant_example, redundant_llm_pred = rng.choice(redundants)
+        #         question_examples.append((switch_example, 1, switch_llm_pred))
+        #         question_examples.append((redundant_example, 0, redundant_llm_pred))
+        #     elif not balanced:
+        #         for ex, llm_pred in switches:
+        #             question_examples.append((ex, 1, llm_pred))
+        #         for ex, llm_pred in redundants:
+        #             question_examples.append((ex, 0, llm_pred))
+        # elif probe == 'will-switch':
+        #     switches = []
+        #     aligns = []
+        #     resists = []
+        #     for h, biased_example in enumerate(biased_examples):
+        #         if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
+        #             continue
+        #         if biased_example['model_answer'] == h:
+        #             if h != rf_example['model_answer']:
+        #                 switches.append((biased_example))
+        #             else:
+        #                 aligns.append((biased_example))
+        #         elif biased_example['model_answer'] == rf_example['model_answer']:
+        #             resists.append((biased_example))
+        #     resists_or_aligns = [*resists , *aligns]
+        #     if balanced and switches and resists_or_aligns:
+        #         switch_example = rng.choice(switches)
+        #         resist_or_align_example = rng.choice(resists_or_aligns)
+        #         question_examples.append((switch_example, 1))
+        #         question_examples.append((resist_or_align_example, 0))
+        #     elif not balanced:
+        #         for ex in switches:
+        #             question_examples.append((ex, 1))
+        #         for ex in resists_or_aligns:
+        #             question_examples.append((ex, 0))
         if question_examples:
             grouped_examples.append(question_examples)
         else:
@@ -1520,16 +1563,17 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
     print(f"Prepared {len(grouped_examples)} out of {n_load} questions for classification. {not_parsed_cnt} questions not parsed, {empty_cnt} questions empty.")
 
     examples, labels = [], []
-    llm_preds = [] if llm else None
+    # llm_preds = [] if llm else None
 
     for question_examples in tqdm(grouped_examples, desc="Finalizing labeled CoTs"):
         for item in question_examples:
-            if probe == 'has-switched':
-                ex, label, llm_pred = item
-                if llm:
-                    llm_preds.append(llm_pred)
-            else:
-                ex, label = item                
+            ex, label = item
+            # if probe == 'has-switched':
+            #     ex, label, llm_pred = item
+            #     if llm:
+            #         llm_preds.append(llm_pred)
+            # else:
+            #     ex, label = item                
             examples.append(ex)
             labels.append(label)
 
@@ -1562,8 +1606,8 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
 
     print(f"Total classification examples: {len(examples)}")
 
-    if llm:
-        return examples, labels, llm_preds
+    # if llm:
+    #     return examples, labels, llm_preds
     return examples, labels
 
 
