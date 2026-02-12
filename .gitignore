@@ -8,7 +8,6 @@ quantitative_comparisons/language_translations/
 quantitative_comparisons/program_translations/
 quantitative_comparisons/analysis/*.pdf
 quantitative_comparisons/analysis/*plots
-scripts/*
 hidden_states/*
 figures/*
 */*.out
@@ -29,11 +28,6 @@ directions_for_v2_paper/
 notebooks/reviews.ipynb
 notebooks/politics.ipynb
 notebooks/harmful.ipynb
-
-# Shell helper scripts
-run_*.sh
-submit_*.sh
-report_progress.sh
 
 # Archives and bundles
 bias_probe_files.zip
