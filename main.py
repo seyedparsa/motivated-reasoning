@@ -25,10 +25,10 @@ if __name__ == "__main__":
     # parser.add_argument("--per_layer", action='store_true', help="Train a probe per layer")
     parser.add_argument("--universal", action='store_true', help="Use a universal probe")
     parser.add_argument("--balanced", action='store_true', help="Use balanced examples for probing")
+    
     parser.add_argument("--filter_mentions", type=bool, default=True, help="Filter out examples whose CoT mentions the hint keyword")
     parser.add_argument("--aggregate_layers", type=str, default=None, help="Aggregate probe predictions across layers per step (all, first:K, last:K, first_last)")
     parser.add_argument("--aggregate_steps", type=str, default=None, help="Aggregate probe predictions across steps per layer (all, first:K, last:K, first_last)")
-
     # parser.add_argument("--n_gen", type=int,  help="Number of responses to generate")
     parser.add_argument("--bs_gen", type=int, default=64, help="Batch size for generation")
     # parser.add_argument("--n_train", type=int, help="Number of responses to train on")
@@ -38,25 +38,55 @@ if __name__ == "__main__":
     parser.add_argument("--n_ckpts", type=int, help="Number of samples from each response")
     parser.add_argument("--ckpt", type=str, default="rel", help="Checkpointing strategy (rel, prefix, suffix)")
     parser.add_argument("--tag", type=str, default='', help="Run tag for separating experiments (e.g., 'debug', 'ablation-v2')")
+    parser.add_argument("--scale", type=str, default='small', help="Scale of the dataset (small, large)")
     # parser.add_argument("--n_test", type=int,  help="Number of responses to test on")    
     args = parser.parse_args()
     split = args.split or ('train' if args.dataset in ['aqua', 'commonsense_qa'] else 'test')
     reason_first = args.reason_first or (args.bias in ['expert', 'metadata'])
 
-    if args.dataset == 'mmlu':    
-        args.n_questions = 3200
-        args.n_test_questions = 800
-    elif args.dataset == 'aqua':
-        args.n_questions = 3200
-        args.n_test_questions = 800
-    elif args.dataset == 'commonsense_qa':
-        args.n_questions = 3200
-        args.n_test_questions = 800
-    elif args.dataset == 'arc-challenge':
-        args.n_questions = 800
-        args.n_test_questions = 200
+    small_scales = {
+        'mmlu': {
+            'n_questions': 3200,
+            'n_test_questions': 800
+        },
+        'aqua': {
+            'n_questions': 3200,
+            'n_test_questions': 800
+        },
+        'commonsense_qa': {
+            'n_questions': 3200,
+            'n_test_questions': 800
+        },
+        'arc-challenge': {
+            'n_questions': 800,
+            'n_test_questions': 200
+        }
+    }
+    large_scales = {
+        'mmlu': {
+            'n_questions': 8000,
+            'n_test_questions': 2000
+        },
+        'aqua': {
+            'n_questions': 3200,
+            'n_test_questions': 800
+        },
+        'commonsense_qa': {
+            'n_questions': 7500,
+            'n_test_questions': 2000
+        },
+        'arc-challenge': {
+            'n_questions': 900,
+            'n_test_questions': 250
+        }
+    }
+    scales = {
+        'small': small_scales,
+        'large': large_scales
+    }
 
-    args.filter_mentions = False if args.probe == 'will-switch' else True
+    args.n_questions = scales[args.scale][args.dataset]['n_questions']
+    args.n_test_questions = scales[args.scale][args.dataset]['n_test_questions']
 
     if args.generate:
         generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, args.n_questions, args.bs_gen, tag=args.tag)
