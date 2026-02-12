@@ -4,8 +4,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../.env"
 
-#SBATCH --account=${SLURM_ACCOUNT}
-#SBATCH --partition=${SLURM_PARTITION}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -16,7 +14,7 @@ source "${SCRIPT_DIR}/../.env"
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 
-source "${CONDA_SH}"
+source ~/.bashrc
 conda activate "${CONDA_ENV}"
 
 cd "${SCRIPT_DIR}/.."

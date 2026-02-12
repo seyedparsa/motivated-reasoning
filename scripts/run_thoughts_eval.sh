@@ -17,7 +17,7 @@ source "${SCRIPT_DIR}/../.env"
 #SBATCH --output=thoughts_eval_%j.out
 #SBATCH --error=thoughts_eval_%j.err
 
-source "${CONDA_SH}"
+source ~/.bashrc
 conda activate "${CONDA_ENV}"
 
 python thoughts_eval.py --model qwen-2.5-7b --data mmlu  --use_cot --give_hint --n_ckpts 5 --predict hint --ckpt suffix

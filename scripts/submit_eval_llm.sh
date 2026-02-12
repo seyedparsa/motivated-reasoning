@@ -46,7 +46,7 @@ set -euo pipefail
 source ${SCRIPT_DIR}/../.env
 
 # Activate conda environment
-source \${CONDA_SH}
+source ~/.bashrc
 conda activate \${CONDA_ENV}
 
 # Set environment variables
