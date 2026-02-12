@@ -50,13 +50,48 @@ MODEL_COLORS = {
 
 
 def load_best_auc_per_model(metrics_dir: Path, task: str = "bias", step_mode: str = "last") -> pd.DataFrame:
-    """Load all bias probe csvs and grab the best AUC per file.
+    """Load best AUC per model/dataset/bias from SQLite DB, falling back to CSVs.
 
     step_mode options:
       - "best": best AUC across all steps and layers (default)
       - "first": best AUC from the first step only
       - "last": best AUC from the last step only
     """
+    # Try SQLite first
+    db_path = metrics_dir.parent / "probe_metrics.db" if metrics_dir.name == "probe_metrics" else metrics_dir / "probe_metrics.db"
+    if db_path.exists():
+        return _load_best_auc_from_db(db_path, task, step_mode)
+    return _load_best_auc_from_csvs(metrics_dir, task, step_mode)
+
+
+def _load_best_auc_from_db(db_path: Path, task: str, step_mode: str) -> pd.DataFrame:
+    """Load best AUC per model/dataset/bias from the SQLite database."""
+    from thoughts.results_db import query_df
+    df = query_df(
+        "SELECT model, dataset, bias, layer, step, rfm_auc FROM probe_metrics WHERE probe = ?",
+        params=(task,),
+        db_path=str(db_path),
+    )
+    if df.empty:
+        raise FileNotFoundError(f"No probe metrics for task={task} in {db_path}")
+    records = []
+    for (model, dataset, bias), group in df.groupby(["model", "dataset", "bias"]):
+        if step_mode == "first":
+            step_df = group[group["step"] == group["step"].min()]
+        elif step_mode == "last":
+            step_df = group[group["step"] == group["step"].max()]
+        else:
+            step_df = group
+        best_row = step_df.loc[step_df["rfm_auc"].idxmax(), ["model", "dataset", "bias", "rfm_auc"]]
+        records.append(best_row.to_frame().T)
+    combined = pd.concat(records, ignore_index=True)
+    combined["bias_label"] = combined["bias"].map(BIAS_LABELS)
+    combined = combined.dropna(subset=["bias_label"])
+    return combined
+
+
+def _load_best_auc_from_csvs(metrics_dir: Path, task: str, step_mode: str) -> pd.DataFrame:
+    """Fallback: load best AUC from per-run CSV files."""
     records: List[pd.DataFrame] = []
     for path in metrics_dir.glob(f"probe_metrics_*_{task}_per-step_3rel.csv"):
         df = pd.read_csv(path)

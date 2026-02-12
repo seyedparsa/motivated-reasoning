@@ -21,6 +21,7 @@ from thoughts.utils import get_choices, get_dataset, get_model, get_tokenizer
 from thoughts.results_db import upsert_rows, upsert_llm_rows
 from datasets import load_from_disk, load_dataset, Dataset
 from huggingface_hub import HfApi
+from huggingface_hub.errors import HfHubHTTPError
 import os
 import tempfile
 import shutil
@@ -39,7 +40,6 @@ from utils import split_indices, preds_to_proba
 from contextlib import redirect_stdout, redirect_stderr, contextmanager
 from sklearn.metrics import roc_auc_score
 
-debug = True
 
 
 def openai_chat_with_retry(client, max_retries=20, initial_delay=1.0, max_delay=120.0, **kwargs):
@@ -71,6 +71,32 @@ def openai_chat_with_retry(client, max_retries=20, initial_delay=1.0, max_delay=
             print(f"[openai_chat_with_retry] Rate limited, attempt {attempt + 1}/{max_retries + 1}. Sleeping {sleep_time:.1f}s...", file=sys.stderr)
             time.sleep(sleep_time)
             delay = min(delay * 2, max_delay)
+
+
+def hf_upload_with_retry(api, path_or_fileobj, path_in_repo, repo_id, repo_type="dataset", max_retries=5, initial_delay=2.0):
+    """Upload file to HuggingFace Hub with retry on 412 Precondition Failed errors.
+
+    This handles race conditions when multiple jobs try to upload to the same repo.
+    """
+    delay = initial_delay
+    for attempt in range(max_retries + 1):
+        try:
+            api.upload_file(
+                path_or_fileobj=path_or_fileobj,
+                path_in_repo=path_in_repo,
+                repo_id=repo_id,
+                repo_type=repo_type
+            )
+            return
+        except HfHubHTTPError as e:
+            if "412" in str(e) and attempt < max_retries:
+                jitter = random.uniform(0, 0.5 * delay)
+                sleep_time = delay + jitter
+                print(f"[hf_upload_with_retry] 412 conflict, attempt {attempt + 1}/{max_retries + 1}. Retrying in {sleep_time:.1f}s...", file=sys.stderr)
+                time.sleep(sleep_time)
+                delay = min(delay * 2, 60.0)
+            else:
+                raise
 
 
 @contextmanager
@@ -341,7 +367,7 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
 
 
 
-def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_questions, batch_size=64):
+def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_questions, batch_size=64, tag=''):
     # TODO: set the appropriate temperature for each model
 
     model, tokenizer = get_model(model_name)
@@ -421,21 +447,16 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
 
     jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{f'{bias}_biased_{hint_idx}' if bias else 'unbiased'}.jsonl"
     repo_id = f"seyedparsa/{model_name}-{dataset_name}"
-    if debug:
-        repo_id += "-debug"
+    if tag:
+        repo_id += f"-{tag}"
     # Create structured output directory
     output_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "outputs")
     os.makedirs(output_dir, exist_ok=True)
     jsonl_path = os.path.join(output_dir, jsonl_name)
     dataset.to_json(jsonl_path)
     api = HfApi()
-    api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)    
-    api.upload_file(
-        path_or_fileobj=jsonl_path,
-        path_in_repo=jsonl_name,
-        repo_id=repo_id,
-        repo_type="dataset"
-    )
+    api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
+    hf_upload_with_retry(api, jsonl_path, jsonl_name, repo_id, repo_type="dataset")
     print(f"Uploaded {jsonl_name} to dataset repo: {repo_id}")
 
     return dataset
@@ -489,12 +510,33 @@ def process_dataset(dataset, model_name, dataset_name, bias=None, hint_idx=None)
     
     return dataset
 
-def load_data(model_name, dataset_name, split, reason_first, bias=None, hint_idx=None):
+def load_data(model_name, dataset_name, split, reason_first, bias=None, hint_idx=None,
+              max_retries=3, timeout=120, tag=''):
     from huggingface_hub import hf_hub_download
     repo_id = f"seyedparsa/{model_name}-{dataset_name}"
+    if tag:
+        repo_id += f"-{tag}"
     jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{f'{bias}_biased_{hint_idx}' if bias else 'unbiased'}.jsonl"
     # Download file directly to avoid HuggingFace's cross-file schema caching
-    local_path = hf_hub_download(repo_id=repo_id, filename=jsonl_name, repo_type="dataset", force_download=True)
+    # Set request timeout via env var (affects urllib3/requests under the hood)
+    prev_timeout = os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT")
+    os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = str(timeout)
+    try:
+        for attempt in range(1, max_retries + 1):
+            try:
+                local_path = hf_hub_download(repo_id=repo_id, filename=jsonl_name, repo_type="dataset")
+                break
+            except Exception as e:
+                if attempt == max_retries:
+                    raise
+                wait = 2 ** attempt
+                print(f"HF download failed (attempt {attempt}/{max_retries}): {e}. Retrying in {wait}s...", file=sys.stderr)
+                time.sleep(wait)
+    finally:
+        if prev_timeout is None:
+            os.environ.pop("HF_HUB_DOWNLOAD_TIMEOUT", None)
+        else:
+            os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = prev_timeout
     dataset = Dataset.from_json(local_path)
     print(len(dataset), "examples loaded from", repo_id, jsonl_name)
     return dataset
@@ -1348,11 +1390,16 @@ def evaluate_responses(model_name, dataset_name, split):
     return summary
 
 
-def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, balanced, tokenizer, shuffle_seed, llm=None):
+def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, balanced, filter_mentions, tokenizer, shuffle_seed, llm=None, tag=''):
     """Label Chain-of-Thought examples for probe training/evaluation.
 
     If llm is provided (e.g., 'gpt-5-nano'), also returns LLM predictions for each example.
     Missing LLM predictions are computed and added to the datasets, which are re-uploaded at the end.
+
+    Args:
+        filter_mentions: If True, filter out examples whose CoT explicitly mentions the
+            hint keyword (e.g., "expert", "metadata"). Set to False to keep all examples
+            regardless of whether the CoT reveals the hint.
 
     Returns:
         If llm is None: (examples, labels)
@@ -1362,20 +1409,25 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
     np_rng = np.random.default_rng(shuffle_seed)
     valid_choices = get_choices(dataset_name)
     n_choices = len(valid_choices)
-    rf_dataset = load_data(model_name, dataset_name, split, reason_first=True)
+    rf_dataset = load_data(model_name, dataset_name, split, reason_first=True, tag=tag)
     reason_first = bias in ['expert', 'metadata']
 
     # Load biased datasets; convert to lists when llm tagging is enabled so row edits persist.
     biased_datasets = []
     llm_field = f"{llm}-detector" if llm else None
+    print(f"Loading biased datasets for {model_name} {dataset_name} {split} {bias} {llm}")
     for h in range(n_choices):
-        dataset_h = load_data(model_name, dataset_name, split, reason_first=reason_first, bias=bias, hint_idx=h)
+        dataset_h = load_data(model_name, dataset_name, split, reason_first=reason_first, bias=bias, hint_idx=h, tag=tag)
         biased_datasets.append(list(dataset_h) if llm else dataset_h)
     datasets_modified = [False] * n_choices
         
     permuation_indices = np_rng.permutation(len(rf_dataset))
     assert offset + n_load <= len(rf_dataset), f"Offset {offset} + n_load {n_load} > len(dataset) {len(rf_dataset)}"
     subset_indices = permuation_indices[offset:offset + n_load].tolist()
+
+    # print(dataset_name, split, n_load, offset, shuffle_seed)
+    # print(subset_indices)
+    # input()
 
     grouped_examples = []
     not_parsed_cnt = 0
@@ -1388,28 +1440,20 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
             continue
         biased_examples = [bd[i] for bd in biased_datasets]
 
-        # Add LLM predictions to dataset if not already present
-        # if llm:
-        #     for h, biased_example in enumerate(biased_examples):
-        #         if llm_field not in biased_example or biased_example[llm_field] is None:
-        #             is_mot, confidence, reasoning = is_motivated_llm(biased_example, bias, h, valid_choices, llm=llm)
-        #             biased_datasets[h][0][llm_field] = is_mot # {'is_motivated': is_mot, 'confidence': confidence, 'reasoning': reasoning}   
-        #             # print(i, biased_datasets[h][i])
-        #             # input()
-        #             datasets_modified[h] = True                    
-        #     biased_examples = [bd[i] for bd in biased_datasets]
 
         if probe in ['own', 'gt']:
             raise NotImplementedError("Own and GT detection not implemented yet.")
         elif probe == 'bias':
             for h, biased_example in enumerate(biased_examples):
-                if balanced or (not cot_mentions_hint_keyword(biased_example, tokenizer)):
+                if not filter_mentions or balanced or (not cot_mentions_hint_keyword(biased_example, tokenizer)):
                     question_examples.append((biased_example, h))
         elif probe == 'has-switched':
             redundants = []
             switches = []
             for h, biased_example in enumerate(biased_examples):
-                if biased_example['model_answer'] != h or cot_mentions_hint_keyword(biased_example, tokenizer):
+                if biased_example['model_answer'] != h:
+                    continue
+                if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
                     continue
                 llm_pred = None
                 if llm:
@@ -1445,22 +1489,28 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
                     question_examples.append((ex, 0, llm_pred))
         elif probe == 'will-switch':
             switches = []
+            aligns = []
             resists = []
             for h, biased_example in enumerate(biased_examples):
+                if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
+                    continue
                 if biased_example['model_answer'] == h:
                     if h != rf_example['model_answer']:
                         switches.append((biased_example))
+                    else:
+                        aligns.append((biased_example))
                 elif biased_example['model_answer'] == rf_example['model_answer']:
                     resists.append((biased_example))
-            if balanced and switches and resists:
+            resists_or_aligns = [*resists , *aligns]
+            if balanced and switches and resists_or_aligns:
                 switch_example = rng.choice(switches)
-                resist_example = rng.choice(resists)
+                resist_or_align_example = rng.choice(resists_or_aligns)
                 question_examples.append((switch_example, 1))
-                question_examples.append((resist_example, 0))
+                question_examples.append((resist_or_align_example, 0))
             elif not balanced:
                 for ex in switches:
                     question_examples.append((ex, 1))
-                for ex in resists:
+                for ex in resists_or_aligns:
                     question_examples.append((ex, 0))
         if question_examples:
             grouped_examples.append(question_examples)
@@ -1472,7 +1522,7 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
     examples, labels = [], []
     llm_preds = [] if llm else None
 
-    for question_examples in tqdm(grouped_examples, desc="Labeling CoTs"):
+    for question_examples in tqdm(grouped_examples, desc="Finalizing labeled CoTs"):
         for item in question_examples:
             if probe == 'has-switched':
                 ex, label, llm_pred = item
@@ -1482,6 +1532,8 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
                 ex, label = item                
             examples.append(ex)
             labels.append(label)
+
+    print(f"Finalized {len(examples)} labeled CoTs with Distribution: {np.bincount(labels)}")
 
 
     for h in range(n_choices):
@@ -1497,18 +1549,15 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
                 return val
             updated_dataset = Dataset.from_dict({k: [get_value(row, k) for row in biased_datasets[h]] for k in all_keys})
             repo_id = f"seyedparsa/{model_name}-{dataset_name}"
+            if tag:
+                repo_id += f"-{tag}"
             jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{bias}_biased_{h}.jsonl"
             output_dir = os.path.join(os.getenv("MOTIVATION_HOME", "outputs"), "datasets")
             os.makedirs(output_dir, exist_ok=True)
             local_path = os.path.join(output_dir, jsonl_name)
             updated_dataset.to_json(local_path)
             api = HfApi()
-            api.upload_file(
-                path_or_fileobj=local_path,
-                path_in_repo=jsonl_name,
-                repo_id=repo_id,
-                repo_type="dataset"
-            )
+            hf_upload_with_retry(api, local_path, jsonl_name, repo_id, repo_type="dataset")
             print(f"Uploaded {jsonl_name} to {repo_id}")
 
     print(f"Total classification examples: {len(examples)}")
@@ -1579,6 +1628,79 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt='rel
     return hidden_states  # list over examples -> list over layers -> tensor(n_ckpt, hidden_size)
 
 
+def _filter_mentions_tag(probe, filter_mentions):
+    """Return the file-path tag for filter_mentions, probe-aware for backward compatibility.
+
+    - 'bias': filter_mentions is irrelevant -> always ''
+    - 'will-switch': default is False -> '' when False, 'filter_mentions' when True
+    - 'has-switched' (and others): default is True -> '' when True, 'include_mentions' when False
+    """
+    if probe == 'bias':
+        return ''
+    if probe == 'will-switch':
+        return 'filter_mentions' if filter_mentions else ''
+    # has-switched and others: default is True
+    return 'include_mentions' if not filter_mentions else ''
+
+
+def get_hidden_states_cache_path(model_name, dataset_name, split, n_load, offset, bias, probe, n_ckpts, ckpt, balanced, filter_mentions, shuffle_seed, tag=''):
+    """Generate a unique cache path for hidden states based on configuration."""
+    cache_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "hidden_states")
+    os.makedirs(cache_dir, exist_ok=True)
+    balanced_tag = "balanced" if balanced else "unbalanced"
+    filter_mentions_tag = _filter_mentions_tag(probe, filter_mentions)
+    key_parts = [model_name, dataset_name, split, str(n_load), str(offset), str(bias), str(probe), f"{n_ckpts}{ckpt}", balanced_tag]
+    if filter_mentions_tag:
+        key_parts.append(filter_mentions_tag)
+    key_parts.append(str(shuffle_seed))
+    if tag:
+        key_parts.append(tag)
+    key = '_'.join(key_parts)
+    key = key.replace("/", "-")
+    return os.path.join(cache_dir, f"{key}.pt")
+
+
+def save_hidden_states_cache(hidden_states, labels, cache_path):
+    """Save hidden states to disk."""
+    torch.save({'hidden_states': hidden_states, 'labels': labels}, cache_path)
+    size_mb = os.path.getsize(cache_path) / (1024 * 1024)
+    print(f"Cached hidden states to {cache_path} ({size_mb:.1f} MB)")
+
+
+def load_hidden_states_cache(cache_path):
+    """Load hidden states from cache."""
+    data = torch.load(cache_path, weights_only=False)
+    print(f"Loaded hidden states from cache: {cache_path}")
+    return data['hidden_states'], data['labels']
+
+
+def get_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt, batch_size,
+                      model_name, dataset_name, split, n_load, offset, bias, probe, balanced, filter_mentions, shuffle_seed, tag=''):
+    """Get hidden states from cache or extract them if not cached."""
+    cache_path = get_hidden_states_cache_path(
+        model_name, dataset_name, split, n_load, offset, bias, probe, n_ckpts, ckpt, balanced, filter_mentions, shuffle_seed, tag=tag
+    )
+
+    if os.path.exists(cache_path):
+        print(f"Loading hidden states from cache: {cache_path}")
+        cached_hidden_states, cached_labels = load_hidden_states_cache(cache_path)
+        # Verify labels match (sanity check)
+        if cached_labels == labels:
+            return cached_hidden_states
+        else:
+            print(f"Warning: Cached labels don't match, re-extracting hidden states...")
+
+    # Extract hidden states
+    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt=ckpt, batch_size=batch_size)
+
+    # Save to cache
+    save_hidden_states_cache(hidden_states, labels, cache_path)
+
+    # Load from cache to ensure consistency (e.g., if we switch to fp16 storage later)
+    hidden_states, _ = load_hidden_states_cache(cache_path)
+    return hidden_states
+
+
 def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, device=None):
     n_choices = len(set(labels))
     n_layers = len(hidden_states[0])
@@ -1608,8 +1730,9 @@ def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, devic
     return X, y
 
 
-def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
+def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, filter_mentions=True, batch_size=64, shuffle_seed=42, tag=''):
     model, tokenizer = get_model(model_name)
+    filter_mentions_tag = _filter_mentions_tag(probe, filter_mentions)
     examples, labels = label_CoTs(
         model_name=model_name,
         dataset_name=dataset_name,
@@ -1619,17 +1742,30 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
         bias=bias,
         probe=probe,
         balanced=balanced,
+        filter_mentions=filter_mentions,
         tokenizer=tokenizer,
         shuffle_seed=shuffle_seed,
+        tag=tag,
     )
-    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt=ckpt, batch_size=batch_size)
+    hidden_states = get_hidden_states(
+        model, tokenizer, examples, labels, n_ckpts, ckpt, batch_size,
+        model_name, dataset_name, split, n_load=n_questions, offset=0,
+        bias=bias, probe=probe, balanced=balanced, filter_mentions=filter_mentions,
+        shuffle_seed=shuffle_seed, tag=tag
+    )
     
     n_layers = len(hidden_states[0])
     n_choices = len(set(labels))
     n_examples = len(labels)
     print(f"Total examples: {n_examples}")    
 
-    probe_env = f"{model_name}_{dataset_name}-{split}-{n_questions}_{bias}-biased_{'balanced' if balanced else 'unbalanced'}"    
+    balanced_tag = 'balanced' if balanced else 'unbalanced'
+    probe_env_parts = [model_name, f"{dataset_name}-{split}-{n_questions}", f"{bias}-biased", balanced_tag]
+    if filter_mentions_tag:
+        probe_env_parts.append(filter_mentions_tag)
+    if tag:
+        probe_env_parts.append(tag)
+    probe_env = '_'.join(probe_env_parts)
     probes_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "probes", probe_env)
     os.makedirs(probes_dir, exist_ok=True)
 
@@ -1651,8 +1787,10 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
             'bws': [1, 10, 100],
             'center_grads': [True, False]
         }     
+
+    load_if_exists = False
         
-    n_layers_to_probe = 5
+    n_layers_to_probe = 2
     if n_layers <= n_layers_to_probe:
         layers = list(range(n_layers))
     else:        
@@ -1674,40 +1812,48 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
             if layer == 0:
                 print(f"Train data shape: {train_data.shape, train_y.shape}, Val data shape: {val_data.shape, val_y.shape}")            
             print(f"Layer {layer}: Training/loading universal probes...")
-            # with suppress_output():
-            if True:
-                try:
-                    rfm_probe = torch.load(rfm_probe_path, weights_only=False)
-                    print(f"RFM probe loaded from {rfm_probe_path}")
-                except FileNotFoundError:
+            # with suppress_output():            
+            try:                
+                if not load_if_exists:
+                    raise FileNotFoundError
+                rfm_probe = torch.load(rfm_probe_path, weights_only=False)
+                print(f"RFM probe loaded from {rfm_probe_path}")
+            except FileNotFoundError:
+                with suppress_output():
                     rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
-                    torch.save(rfm_probe, rfm_probe_path)   
-                    print(f"RFM probe saved to {rfm_probe_path}")
-                try:
-                    state = torch.load(linear_probe_path, weights_only=False)
-                    linear_probe_beta, linear_probe_bias = state['beta'], state['bias']                              
-                    print(f"Linear probe loaded from {linear_probe_path}")
-                except FileNotFoundError:
-                    linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                    torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-                    print(f"Linear probe saved to {linear_probe_path}")
-                try:
-                    state = torch.load(logistic_probe_path, weights_only=False)
-                    logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
-                    print(f"Logistic probe loaded from {logistic_probe_path}")
-                except FileNotFoundError:
-                    logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
-                    torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
-                    print(f"Logistic probe saved to {logistic_probe_path}")
+                torch.save(rfm_probe, rfm_probe_path)   
+                print(f"RFM probe saved to {rfm_probe_path}")
+            try:
+                if not load_if_exists:
+                    raise FileNotFoundError
+                state = torch.load(linear_probe_path, weights_only=False)
+                linear_probe_beta, linear_probe_bias = state['beta'], state['bias']                              
+                print(f"Linear probe loaded from {linear_probe_path}")
+            except FileNotFoundError:
+                # linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                # torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                # print(f"Linear probe saved to {linear_probe_path}")
+                print(f"Linear probe not found, skipping...")
+            try:
+                if not load_if_exists:
+                    raise FileNotFoundError
+                state = torch.load(logistic_probe_path, weights_only=False)
+                logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                print(f"Logistic probe loaded from {logistic_probe_path}")
+            except FileNotFoundError:
+                # logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
+                # torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+                # print(f"Logistic probe saved to {logistic_probe_path}")
+                print(f"Logistic probe not found, skipping...")
             print(f"Layer {layer}: Universal probes ready, computing metrics...")
             rfm_val_metrics = compute_prediction_metrics(rfm_probe.predict(val_data), val_y)
-            linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
-            linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
-            logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
-            logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
-            logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
-            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Logistic Val Acc: {logistic_val_metrics['accuracy']:.4f}")
-            print(f"Layer {layer}: RFM Val AUC: {rfm_val_metrics['auc']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}, Logistic Val AUC: {logistic_val_metrics['auc']:.4f}")
+            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
+            # linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
+            # logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
+            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
+            # logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
+            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}")
+            print(f"Layer {layer}: RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
         for step in range(n_ckpts): 
             val_data, val_y = extract_Xy(hidden_states, labels, val_indices, layer=layer, step=step, device=model.device)
             if not universal_probe:            
@@ -1720,32 +1866,60 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                 print(f"Train data shape: {train_data.shape, train_y.shape}, Val data shape: {val_data.shape, val_y.shape}")            
                 print(f"Layer {layer}, Step {step}: Training/loading probes...")            
                 try:
+                    if not load_if_exists:
+                        raise FileNotFoundError
                     rfm_probe = torch.load(rfm_probe_path, weights_only=False)
                     print(f"RFM probe loaded from {rfm_probe_path}")
                 except FileNotFoundError:
                     with suppress_output():
-                        rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='accuracy')
+                        rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
                     torch.save(rfm_probe, rfm_probe_path)
                     print(f"RFM probe saved to {rfm_probe_path}")
                 try:
+                    if not load_if_exists:
+                        raise FileNotFoundError
                     state = torch.load(linear_probe_path, weights_only=False)
                     linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
                     print(f"Linear probe loaded from {linear_probe_path}")
                 except FileNotFoundError:
-                    linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                    torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-                    print(f"Linear probe saved to {linear_probe_path}")
+                    # linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                    # torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                    # print(f"Linear probe saved to {linear_probe_path}")
+                    print(f"Linear probe not found, skipping...")
                 print(f"Layer {layer}, Step {step}: Probes ready, computing metrics...")
             rfm_preds = rfm_probe.predict(val_data)
-            linear_preds = val_data @ linear_probe_beta + linear_probe_bias
+            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias
+            # linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
             rfm_val_metrics = compute_prediction_metrics(rfm_preds, val_y)
-            linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
             print(f"Layer {layer}, Step {step}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
-            print(f"Layer {layer}, Step {step}: Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}")
+            # print(f"Layer {layer}, Step {step}: Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}")
 
 
-def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, batch_size=64, shuffle_seed=42):
+def _parse_slice_spec(spec, items):
+    """Return subset of items based on a slice spec string.
+
+    Supported specs:
+        'all'         -- all items
+        'first:K'     -- first K items
+        'last:K'      -- last K items
+        'first_last'  -- first and last item only
+    """
+    if spec == 'all':
+        return items
+    if spec == 'first_last':
+        return [items[0], items[-1]] if len(items) >= 2 else items
+    if spec.startswith('first:'):
+        k = int(spec.split(':')[1])
+        return items[:k]
+    if spec.startswith('last:'):
+        k = int(spec.split(':')[1])
+        return items[-k:]
+    raise ValueError(f"Unknown aggregation spec: {spec!r}. Use 'all', 'first:K', 'last:K', or 'first_last'.")
+
+
+def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, filter_mentions=True, batch_size=64, shuffle_seed=42, aggregate_layers=None, aggregate_steps=None, tag=''):
     model, tokenizer = get_model(model_name)
+    filter_mentions_tag = _filter_mentions_tag(probe, filter_mentions)
     examples, labels = label_CoTs(
         model_name=model_name,
         dataset_name=dataset_name,
@@ -1755,12 +1929,28 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
         bias=bias,
         probe=probe,
         balanced=balanced,
+        filter_mentions=filter_mentions,
         tokenizer=tokenizer,
         shuffle_seed=shuffle_seed,
+        tag=tag,
     )
 
-    hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt=ckpt, batch_size=batch_size)
-    probe_env = f"{model_name}_{dataset_name}-{split}-{n_questions}_{bias}-biased_{'balanced' if balanced else 'unbalanced'}"
+    hidden_states = get_hidden_states(
+        model, tokenizer, examples, labels, n_ckpts, ckpt, batch_size,
+        model_name, dataset_name, split, n_load=n_test_questions, offset=n_questions,
+        bias=bias, probe=probe, balanced=balanced, filter_mentions=filter_mentions,
+        shuffle_seed=shuffle_seed, tag=tag
+    )
+    # Compute label distribution
+    label_counts = np.bincount(labels, minlength=2)
+    n_zeros, n_ones = int(label_counts[0]), int(label_counts[1])
+    balanced_tag = 'balanced' if balanced else 'unbalanced'
+    probe_env_parts = [model_name, f"{dataset_name}-{split}-{n_questions}", f"{bias}-biased", balanced_tag]
+    if filter_mentions_tag:
+        probe_env_parts.append(filter_mentions_tag)
+    if tag:
+        probe_env_parts.append(tag)
+    probe_env = '_'.join(probe_env_parts)
     probes_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "probes", probe_env)
     n_layers = len(hidden_states[0])
     results_rows = []
@@ -1768,9 +1958,17 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
     probe_tag = probe or "none"
     split_tag = split or "unspecified"
     run_scope = "universal" if universal_probe else "per-step"
-    csv_tag = f"{model_name}_{dataset_name}_{split_tag}_{bias_tag}_{probe_tag}_{run_scope}_{n_ckpts}{ckpt}"
+    csv_parts = [model_name, dataset_name, split_tag, bias_tag, probe_tag, run_scope, f"{n_ckpts}{ckpt}"]
+    if filter_mentions_tag:
+        csv_parts.append(filter_mentions_tag)
+    if tag:
+        csv_parts.append(tag)
+    csv_tag = '_'.join(csv_parts)
     csv_tag = csv_tag.replace("/", "-")
     outputs_dir = os.path.join("outputs", "probe_metrics")
+    # Collect per-(layer, step) predictions for aggregation along either axis
+    if aggregate_layers is not None or aggregate_steps is not None:
+        all_preds = {}  # (layer, step) -> {'rfm': tensor, 'linear': tensor|None, 'test_y': tensor}
     for layer in range(n_layers):
         if universal_probe:
             probe_config = f"{probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
@@ -1780,13 +1978,13 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
             try:
                 rfm_probe = torch.load(rfm_probe_path, weights_only=False)
             except FileNotFoundError:
-                print(f"RFM probe not found for layer {layer}", file=sys.stderr)
+                # print(f"RFM probe not found for layer {layer}", file=sys.stderr)
                 continue
             try:
                 state = torch.load(linear_probe_path, weights_only=False)
                 linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
             except FileNotFoundError:
-                print(f"Linear probe not found for layer {layer}", file=sys.stderr)
+                # print(f"Linear probe not found for layer {layer}", file=sys.stderr)
                 linear_probe_beta, linear_probe_bias = None, None
         for step in range(n_ckpts):
             if not universal_probe:
@@ -1797,25 +1995,75 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 try:
                     rfm_probe = torch.load(rfm_probe_path, weights_only=False)
                 except FileNotFoundError:
-                    print(f"RFM probe not found for layer {layer}, step {step}", file=sys.stderr)
+                    # print(f"RFM probe not found for layer {layer}, step {step}", file=sys.stderr)
                     continue
                 try:
                     state = torch.load(linear_probe_path, weights_only=False)
                     linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
                 except FileNotFoundError:
-                    print(f"Linear probe not found for layer {layer}, step {step}", file=sys.stderr)
+                    # print(f"Linear probe not found for layer {layer}, step {step}", file=sys.stderr)
                     linear_probe_beta, linear_probe_bias = None, None
             test_data, test_y = extract_Xy(hidden_states, labels, layer=layer, step=step, device=model.device)
-            rfm_preds = rfm_probe.predict(test_data)
+            rfm_preds = rfm_probe.predict(test_data)            
             rfm_test_metrics = compute_prediction_metrics(rfm_preds, test_y)
-            print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}")
-            print(f"Layer {layer}, Step {step}: RFM Test AUC: {rfm_test_metrics['auc']:.4f}")
+            if step == 0:
+                print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}, RFM Test AUC: {rfm_test_metrics['auc']:.4f}")
+
+            # Show a few example predictions (only for last layer, first step to avoid clutter)
+            if layer == n_layers - 1 and step == n_ckpts - 1 and probe in ['bias', 'has-switched']:
+                n_show = min(5, len(examples))
+                rfm_pred_classes = rfm_preds.argmax(dim=1).cpu().numpy()
+                true_classes = test_y.argmax(dim=1).cpu().numpy()
+                print(f"\n{'='*80}")
+                print(f"Example RFM predictions (Layer {layer}, Step {step}):")
+                print(f"{'='*80}")
+                for idx in range(n_show):
+                    pred = rfm_pred_classes[idx]
+                    true = true_classes[idx]
+                    correct = "✓" if pred == true else "✗"
+                    output_text = examples[idx].get('model_output', '[no text]')
+                    print(f"\n--- Example {idx + 1} [{correct}] ---")
+                    print(f"True label: {true}, RFM pred: {pred}")
+                    # Show LLM judgement if available
+                    llm_detector_fields = [k for k in examples[idx].keys() if k.endswith('-detector')]
+                    for llm_field in llm_detector_fields:
+                        llm_pred = examples[idx].get(llm_field)
+                        if llm_pred and isinstance(llm_pred, dict):
+                            llm_name = llm_field.replace('-detector', '')
+                            is_mot = llm_pred.get('is_motivated')
+                            conf = llm_pred.get('confidence')
+                            reasoning = llm_pred.get('reasoning', '')
+                            llm_pred_label = 1 if is_mot else 0
+                            llm_correct = "✓" if llm_pred_label == true else "✗"
+                            print(f"LLM ({llm_name}) [{llm_correct}]: is_motivated={is_mot}, conf={conf:.2f}")
+                            print(f"  Reasoning: {reasoning}")
+                    print(f"Generation:\n{output_text}")
+                            # if correct == "✓" and llm_correct == "✗":
+                            #     print(f"LLM ({llm_name}) is incorrect for this example")
+                            #     input()
+                            # elif correct == "✗" and llm_correct == "✓":
+                            #     print(f"RFM is incorrect for this example")
+                            #     input()
+                            # elif correct == "✗" and llm_correct == "✗":
+                            #     print(f"RFM and LLM are incorrect for this example")
+                            #     input()                            
+                print(f"{'='*80}\n")
+
             linear_test_metrics = {'accuracy': None, 'auc': None}
+            linear_preds = None
             if linear_probe_beta is not None:
                 linear_preds = test_data @ linear_probe_beta + linear_probe_bias
-                linear_test_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), test_y)
+                linear_preds = preds_to_proba(linear_preds)
+                linear_test_metrics = compute_prediction_metrics(linear_preds, test_y)
                 print(f"Layer {layer}, Step {step}: Linear Test Acc: {linear_test_metrics['accuracy']:.4f}")
                 print(f"Layer {layer}, Step {step}: Linear Test AUC: {linear_test_metrics['auc']:.4f}")
+            # Collect predictions for aggregation across layers and/or steps
+            if aggregate_layers is not None or aggregate_steps is not None:
+                all_preds[(layer, step)] = {
+                    'rfm': rfm_preds.detach().cpu(),
+                    'linear': linear_preds.detach().cpu() if linear_preds is not None else None,
+                    'test_y': test_y.detach().cpu(),
+                }
             test_examples = int(test_y.shape[0]) if hasattr(test_y, "shape") else len(test_y)
             results_rows.append(
                 {
@@ -1826,19 +2074,95 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                     "probe": probe_tag,
                     "universal_probe": int(universal_probe),
                     "balanced": int(balanced),
+                    "filter_mentions": int(filter_mentions),
                     "n_ckpts": n_ckpts,
                     "ckpt_mode": ckpt,
                     "layer": layer,
                     "step": step,
+                    "tag": tag,
                     "n_questions": n_questions,
                     "n_test_questions": n_test_questions,
                     "test_examples": test_examples,
+                    "n_zeros": n_zeros,
+                    "n_ones": n_ones,
                     "rfm_accuracy": rfm_test_metrics.get("accuracy"),
                     "rfm_auc": rfm_test_metrics.get("auc"),
                     "linear_accuracy": linear_test_metrics.get("accuracy"),
                     "linear_auc": linear_test_metrics.get("auc"),
                 }
             )
+
+    # --- Aggregation across layers and/or steps ---
+    if (aggregate_layers is not None or aggregate_steps is not None) and all_preds:
+        found_layers = sorted(set(l for l, s in all_preds))
+        found_steps = sorted(set(s for l, s in all_preds))
+
+        def _aggregate_preds(keys, label):
+            """Average predictions over a set of (layer, step) keys and return metrics."""
+            rfm_list = [all_preds[k]['rfm'] for k in keys if k in all_preds]
+            linear_list = [all_preds[k]['linear'] for k in keys if k in all_preds and all_preds[k]['linear'] is not None]
+            # Use test_y from the first key (labels are identical across aggregated axis)
+            test_y_agg = all_preds[keys[0]]['test_y']
+            test_examples_agg = int(test_y_agg.shape[0])
+
+            rfm_agg_metrics = {'accuracy': None, 'auc': None}
+            if rfm_list:
+                rfm_mean = torch.stack(rfm_list, dim=0).mean(dim=0)
+                rfm_agg_metrics = compute_prediction_metrics(rfm_mean, test_y_agg)
+                print(f"{label}: RFM Test Acc: {rfm_agg_metrics['accuracy']:.4f}, AUC: {rfm_agg_metrics['auc']:.4f}  ({len(rfm_list)} probes)")
+
+            linear_agg_metrics = {'accuracy': None, 'auc': None}
+            if linear_list:
+                linear_mean = torch.stack(linear_list, dim=0).mean(dim=0)
+                linear_agg_metrics = compute_prediction_metrics(linear_mean, test_y_agg)
+                print(f"{label}: Linear Test Acc: {linear_agg_metrics['accuracy']:.4f}, AUC: {linear_agg_metrics['auc']:.4f}  ({len(linear_list)} probes)")
+
+            return rfm_agg_metrics, linear_agg_metrics, test_examples_agg
+
+        def _make_agg_row(layer_val, step_val, rfm_m, lin_m, n_ex):
+            return {
+                "model": model_name, "dataset": dataset_name, "split": split_tag,
+                "bias": bias_tag, "probe": probe_tag,
+                "universal_probe": int(universal_probe), "balanced": int(balanced),
+                "filter_mentions": int(filter_mentions),
+                "n_ckpts": n_ckpts, "ckpt_mode": ckpt,
+                "layer": layer_val, "step": step_val, "tag": tag,
+                "n_questions": n_questions, "n_test_questions": n_test_questions,
+                "test_examples": n_ex, "n_zeros": n_zeros, "n_ones": n_ones,
+                "rfm_accuracy": rfm_m.get("accuracy"), "rfm_auc": rfm_m.get("auc"),
+                "linear_accuracy": lin_m.get("accuracy"), "linear_auc": lin_m.get("auc"),
+            }
+
+        # Aggregate across layers (one row per step)
+        if aggregate_layers is not None:
+            agg_layers = _parse_slice_spec(aggregate_layers, found_layers)
+            layer_tag = f"agg_{aggregate_layers}"
+            for step in found_steps:
+                keys = [(l, step) for l in agg_layers if (l, step) in all_preds]
+                if not keys:
+                    continue
+                rfm_m, lin_m, n_ex = _aggregate_preds(keys, f"Aggregate layers ({aggregate_layers}), Step {step}")
+                results_rows.append(_make_agg_row(layer_tag, step, rfm_m, lin_m, n_ex))
+
+        # Aggregate across steps (one row per layer)
+        if aggregate_steps is not None:
+            agg_steps = _parse_slice_spec(aggregate_steps, found_steps)
+            step_tag = f"agg_{aggregate_steps}"
+            for layer in found_layers:
+                keys = [(layer, s) for s in agg_steps if (layer, s) in all_preds]
+                if not keys:
+                    continue
+                rfm_m, lin_m, n_ex = _aggregate_preds(keys, f"Layer {layer}, Aggregate steps ({aggregate_steps})")
+                results_rows.append(_make_agg_row(layer, step_tag, rfm_m, lin_m, n_ex))
+
+        # Aggregate across both axes (single row)
+        if aggregate_layers is not None and aggregate_steps is not None:
+            agg_layers = _parse_slice_spec(aggregate_layers, found_layers)
+            agg_steps = _parse_slice_spec(aggregate_steps, found_steps)
+            keys = [(l, s) for l in agg_layers for s in agg_steps if (l, s) in all_preds]
+            if keys:
+                rfm_m, lin_m, n_ex = _aggregate_preds(keys, f"Aggregate layers ({aggregate_layers}) + steps ({aggregate_steps})")
+                results_rows.append(_make_agg_row(f"agg_{aggregate_layers}", f"agg_{aggregate_steps}", rfm_m, lin_m, n_ex))
 
     if results_rows:
         upsert_rows(results_rows)
@@ -1852,8 +2176,11 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
             print(f"Saved probe metrics CSV to {csv_path}")
 
 
-def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions, bias, llm='gpt-5-nano', balanced=True, shuffle_seed=42):
+def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe='has-switched', llm='gpt-5-nano', balanced=True, filter_mentions=True, shuffle_seed=42, tag=''):
     """Evaluate LLM baseline for has-switched detection. Save metrics to llm_metrics DB."""
+
+    if probe != 'has-switched':
+        raise ValueError(f"LLM baseline evaluation is only supported for 'has-switched' probe, got {probe}")
     from sklearn.metrics import roc_auc_score
 
     tokenizer = get_tokenizer(model_name)
@@ -1865,11 +2192,13 @@ def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions,
         n_load=n_test_questions,
         offset=n_questions,
         bias=bias,
-        probe='has-switched',
+        probe=probe,
         balanced=balanced,
+        filter_mentions=filter_mentions,
         tokenizer=tokenizer,
         shuffle_seed=shuffle_seed,
         llm=llm,
+        tag=tag,
     )
 
     # Compute metrics from llm_preds
@@ -1888,9 +2217,14 @@ def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions,
 
     print(f"LLM baseline ({llm}): Acc={llm_accuracy:.2f}%, AUC={llm_auc}")
 
+    # Compute label distribution
+    label_counts = np.bincount(labels_arr, minlength=2)
+    n_zeros, n_ones = int(label_counts[0]), int(label_counts[1])
+
     # Save to database
     split_tag = split or "unspecified"
     bias_tag = bias or "none"
+    filter_mentions_tag = _filter_mentions_tag(probe, filter_mentions)
     row = {
         "model": model_name,
         "dataset": dataset_name,
@@ -1898,9 +2232,14 @@ def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions,
         "bias": bias_tag,
         "probe": "has-switched",
         "balanced": int(balanced),
+        "filter_mentions": int(filter_mentions),
+        "llm": llm,
+        "tag": tag,
         "n_questions": n_questions,
         "n_test_questions": n_test_questions,
         "test_examples": len(examples),
+        "n_zeros": n_zeros,
+        "n_ones": n_ones,
         "llm_accuracy": llm_accuracy,
         "llm_auc": llm_auc,
     }

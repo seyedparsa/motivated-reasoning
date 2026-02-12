@@ -56,12 +56,12 @@ old_outputs/
 main.pdf
 simons.yml
 simons_local.yml
+.env
 
 # Editor and IDE
 .vscode/
 
 # Temporary/scratch files
-base.py
 core
 
 # Screenshots and images

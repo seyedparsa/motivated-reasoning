@@ -95,7 +95,17 @@ def compute_prediction_metrics(preds, labels, classification_threshold=0.5):
     if isinstance(labels, torch.Tensor):
         labels = labels.cpu().numpy()
 
-    auc = roc_auc_score(labels, preds)
+    auc_macro = roc_auc_score(labels, preds, average='macro')
+    auc_micro = roc_auc_score(labels, preds, average='micro')
+    auc_weighted = roc_auc_score(labels, preds, average='weighted')
+    auc_samples = roc_auc_score(labels, preds, average='samples')
+    pos_labels = labels[:, 1]
+    pos_preds = preds[:, 1]
+    auc_binary_pos = roc_auc_score(pos_labels, pos_preds)
+    neg_labels = labels[:, 0]
+    neg_preds = preds[:, 0]
+    auc_binary_neg = roc_auc_score(neg_labels, neg_preds)
+    
     mse = np.mean((preds-labels)**2)
     if num_classes == 1:  # Binary classification
         preds = np.where(preds >= classification_threshold, 1, 0)
@@ -128,7 +138,7 @@ def compute_prediction_metrics(preds, labels, classification_threshold=0.5):
         recall /= num_classes
         f1 /= num_classes
 
-    metrics = {'accuracy': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'auc': auc, 'mse': mse}
+    metrics = {'accuracy': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'auc_macro': auc_macro, 'auc_micro': auc_micro, 'auc_weighted': auc_weighted, 'auc_samples': auc_samples, 'auc': auc_binary_pos, 'auc_binary_neg': auc_binary_neg, 'mse': mse}
     return metrics
 
 def get_hidden_states(prompts, model, tokenizer, hidden_layers, forward_batch_size, rep_token=-1, all_positions=False):
