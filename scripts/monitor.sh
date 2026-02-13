@@ -148,6 +148,10 @@ monitor_once() {
     # Handle stuck CG jobs that have no .err files
     for stuck_id in $stuck_jobs; do
         [ -z "$stuck_id" ] && continue
+        # Filter by --since if specified
+        if [ -n "$SINCE_JOB" ] && [ "$stuck_id" -lt "$SINCE_JOB" ]; then
+            continue
+        fi
         # Skip if already processed (has .err file)
         if ls job_*${stuck_id}.err >/dev/null 2>&1; then
             continue
