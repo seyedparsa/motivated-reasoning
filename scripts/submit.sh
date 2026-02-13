@@ -19,6 +19,7 @@ MEM=${MEM:-100g}
 GPUS=${GPUS:-1}
 CPUS=${CPUS:-1}
 NODES=${NODES:-1}
+EXCLUDE=${EXCLUDE:-}
 
 # Experiment settings
 MODELS=${MODELS:-all}
@@ -143,7 +144,7 @@ for model in "${MODEL_ARR[@]}"; do
                 echo "  Model: ${model}, Dataset: ${dataset}, Bias: ${bias}, Probe: ${probe}"
                 echo "  Actions:${ACTION_FLAGS}"
 
-                job_id=$(sbatch --export=ALL --parsable <<EOF
+                job_id=$(sbatch --export=ALL --parsable${EXCLUDE:+ --exclude=${EXCLUDE}} <<EOF
 #!/bin/bash
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
