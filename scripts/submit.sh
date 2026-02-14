@@ -14,7 +14,7 @@ source "${SCRIPT_DIR}/../.env"
 # SLURM settings
 ACCOUNT=${ACCOUNT:-${SLURM_ACCOUNT}}
 PARTITION=${PARTITION:-${SLURM_PARTITION}}
-TIME=${TIME:-04:00:00}
+TIME=${TIME:-08:00:00}
 MEM=${MEM:-100g}
 GPUS=${GPUS:-1}
 CPUS=${CPUS:-1}
@@ -31,7 +31,7 @@ HINT_IDX=${HINT_IDX:-0}
 TAG=${TAG:-}
 
 # Scale and checkpointing
-SCALE=${SCALE:-large}
+SCALE=${SCALE:-small}
 N_CKPTS=${N_CKPTS:-3}
 CKPT=${CKPT:-rel}
 
@@ -51,6 +51,9 @@ EVALUATE_LLM=${EVALUATE_LLM:-0}
 # Aggregation options
 AGGREGATE_LAYERS=${AGGREGATE_LAYERS:-}
 AGGREGATE_STEPS=${AGGREGATE_STEPS:-}
+
+# Misc options
+NO_UPDATE_LAST=${NO_UPDATE_LAST:-0}
 
 # Predefined sets
 ALL_MODELS="qwen-3-8b,llama-3.1-8b,gemma-3-4b"
@@ -197,7 +200,7 @@ echo ""
 echo "Submitted ${job_count} job(s)"
 
 # Save first job ID for monitor.sh
-if [ -n "$first_job_id" ]; then
+if [ -n "$first_job_id" ] && [ "${NO_UPDATE_LAST}" != "1" ]; then
     echo "$first_job_id" > "${SCRIPT_DIR}/.last_submit"
     echo "Monitor with: ./scripts/monitor.sh"
 fi
