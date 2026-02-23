@@ -7,9 +7,10 @@ import random
 import re
 import hashlib
 import time
+import glob
 # import rfm
 from tqdm import tqdm
-from transformers import StoppingCriteria, StoppingCriteriaList
+from transformers import StoppingCriteria, StoppingCriteriaList, TextStreamer
 import openai
 from openai import RateLimitError
 import json
@@ -201,15 +202,17 @@ def extract_questions(batch, dataset_name):
         elif dataset_name == 'arc-challenge':
             question = example['question']
             options = example['choices']['text']
-            options = [f"{chr(65 + i)}. {opt}" for i, opt in enumerate(options)]            
+            options = [f"{chr(65 + i)}. {opt}" for i, opt in enumerate(options)]
             labels = example['choices']['label']
-            correct_idx = labels.index(example['answerKey'])
+            answer_key = example.get('answerKey', '')
+            correct_idx = labels.index(answer_key) if answer_key in labels else -1
         elif dataset_name == 'commonsense_qa':
             question = example['question']
             options = example['choices']['text']
             options = [f"{chr(65 + i)}. {opt}" for i, opt in enumerate(options)]
             labels = example['choices']['label']
-            correct_idx = labels.index(example['answerKey'])
+            answer_key = example.get('answerKey', '')
+            correct_idx = labels.index(answer_key) if answer_key in labels else -1
         elif dataset_name == 'gpqa':
             question = example['Question']
             options = [
@@ -260,6 +263,9 @@ def extract_answer(output, model_name, dataset_name, mode=None, options=None):
     valid_letter_choices = get_choices(dataset_name)
 
     def select_letter_choice(output_text):
+        # Normalize full-width colon to ASCII colon and strip markdown bold/italic
+        output_text = output_text.replace('\uff1a', ':')
+        output_text = re.sub(r'\*{1,2}(.*?)\*{1,2}', r'\1', output_text)
         pat_strict = r'Correct choice:\s*[\*\_\-\(\)"""`\']*([A-Z])(?![A-Za-z0-9])'
         pat_flex = r'correct\s+(?:choice|answer)(?:\s+is)?\s*:?\s*\*{0,2}([A-Z])(?![A-Za-z0-9])'
         pat_boxed = r'(?:final\s+answer|the\s+final\s+answer)\s*(?:is)?\s*\$\\boxed\{([A-Z])\}\$'
@@ -1665,10 +1671,16 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt='rel
             gen_len = gen_lengths[start + b]
             if ckpt == 'rel':
                 ckpt_indices = -(gen_len+1) + np.linspace(0, gen_len-1, n_ckpts).astype(int)
-            elif ckpt == 'prefix':
-                ckpt_indices = -(gen_len+1) + np.arange(0, n_ckpts) * 5
-            elif ckpt == 'suffix':
-                ckpt_indices = -2 - np.arange(n_ckpts-1, -1, -1) * 5
+            elif ckpt.startswith('before'): # like before[offset]
+                offset = int(ckpt[len('before['):-1])
+                ckpt_indices = -(gen_len+1) + np.arange(offset, offset + n_ckpts)                
+            elif ckpt.startswith('after'): # like after[offset]
+                offset = int(ckpt[len('after['):-1])
+                ckpt_indices = -2 + np.arange(offset, offset + n_ckpts)
+            # elif ckpt == 'prefix':
+            #     ckpt_indices = -(gen_len+1) + np.arange(0, n_ckpts) * 5
+            # elif ckpt == 'suffix':
+            #     ckpt_indices = -2 - np.arange(n_ckpts-1, -1, -1) * 5
             per_layer = []
             for layer_h in hs_tuple:  # (B,L,H)                
                 per_layer.append(layer_h[b, ckpt_indices, :].detach().cpu())
@@ -1888,10 +1900,10 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                 linear_probe_beta, linear_probe_bias = state['beta'], state['bias']                              
                 print(f"Linear probe loaded from {linear_probe_path}")
             except FileNotFoundError:
-                # linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                # torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-                # print(f"Linear probe saved to {linear_probe_path}")
-                print(f"Linear probe not found, skipping...")
+                linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                print(f"Linear probe saved to {linear_probe_path}")
+                # print(f"Linear probe not found, skipping...")
             try:
                 if not load_if_exists:
                     raise FileNotFoundError
@@ -1899,17 +1911,17 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                 logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
                 print(f"Logistic probe loaded from {logistic_probe_path}")
             except FileNotFoundError:
-                # logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
-                # torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
-                # print(f"Logistic probe saved to {logistic_probe_path}")
-                print(f"Logistic probe not found, skipping...")
+                logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
+                torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+                print(f"Logistic probe saved to {logistic_probe_path}")
+                # print(f"Logistic probe not found, skipping...")
             print(f"Layer {layer}: Universal probes ready, computing metrics...")
             rfm_val_metrics = compute_prediction_metrics(rfm_probe.predict(val_data), val_y)
-            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
-            # linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
-            # logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
-            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
-            # logistic_val_metrics = compute_prediction_metrics(preds_to_proba(logistic_exp_logits), val_y)
+            linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
+            linear_val_metrics = compute_prediction_metrics(linear_preds, val_y)
+            logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
+            logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
+            logistic_val_metrics = compute_prediction_metrics(logistic_exp_logits, val_y)
             print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}")
             print(f"Layer {layer}: RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
         for step in range(n_ckpts): 
@@ -1932,8 +1944,8 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                     if isinstance(e, (EOFError, RuntimeError)):
                         print(f"Corrupted probe file, retraining: {e}")
                     print(f"Starting RFM training for layer {layer}, step {step}...")
-                    # with suppress_output():
-                    rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
+                    with suppress_output():
+                        rfm_probe = train_rfm_probe_on_concept(train_data, train_y, val_data, val_y, rfm_hparams, rfm_search_space, tuning_metric='auc')
                     print(f"RFM training complete for layer {layer}, step {step}")
                     torch.save(rfm_probe, rfm_probe_path)
                     print(f"RFM probe saved to {rfm_probe_path}")
@@ -2329,3 +2341,239 @@ def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions,
     log_done(f"evaluate_llm: {model_name}/{dataset_name}/{bias}/{llm}")
 
     return {'accuracy': llm_accuracy, 'auc': llm_auc}
+
+
+def interactive_session(model_name, probe='mot_vs_oth', llm=None):
+    """Interactive mode: provide a question, apply a hint, generate a response,
+    run pre-trained probes from multiple datasets, and call is_motivated_llm."""
+
+    print("Loading model...")
+    model, tokenizer = get_model(model_name)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    model.eval()
+
+    n_ckpts = 3
+    ckpt = 'rel'
+
+    while True:
+        # --- (a) Input mode ---
+        print("\n" + "=" * 60)
+        mode = input("[D]ataset or [F]ree-form? ").strip().lower()
+
+        if mode.startswith('d'):
+            dataset_name = input("Dataset (mmlu/arc-challenge/commonsense_qa/aqua): ").strip()
+            split = input("Split (train/test) [default: train]: ").strip() or 'train'
+            dataset = get_dataset(dataset_name, split=split)
+            valid_choices = get_choices(dataset_name)
+            idx = int(input(f"Question index (0-{len(dataset)-1}): ").strip())
+            batch = {k: [dataset[idx][k]] for k in dataset[idx].keys()}
+            base_prompts, corrects = extract_questions(batch, dataset_name)
+            base_prompt = base_prompts[0]
+            correct_idx = corrects[0]
+            print(f"\n{base_prompt}")
+            print(f"Correct answer: {valid_choices[correct_idx]}")
+        elif mode.startswith('f'):
+            print("\nEnter a multiple-choice question as plain text (no letter prefixes).")
+            print("Then provide the answer choices as a comma-separated list.")
+            print("Letters (A, B, C, ...) will be assigned automatically.\n")
+            print("Example:")
+            print("  Question: What is the capital of France?")
+            print("  Choices:  Paris, London, Berlin, Madrid")
+            print("  -> Becomes: A. Paris, B. London, C. Berlin, D. Madrid\n")
+            question = input("Enter your question: ").strip()
+            choices_str = input("Enter answer choices (comma-separated): ").strip()
+            choices_list = [c.strip() for c in choices_str.split(',')]
+            valid_choices = [chr(65 + i) for i in range(len(choices_list))]
+            dataset_name = None
+            base_prompt = f"Question: {question}\n"
+            for i, choice in enumerate(choices_list):
+                base_prompt += f"{chr(65 + i)}. {choice}\n"
+            correct_idx = None
+            print(f"\n{base_prompt}")
+        else:
+            print("Invalid choice, try again.")
+            continue
+
+        # --- (b) Hint parameters ---
+        bias = input("Bias type (expert/self/metadata): ").strip()
+        if bias not in ('expert', 'self', 'metadata'):
+            print(f"Invalid bias type: {bias}")
+            continue
+
+        reason_first = bias in ('expert', 'metadata')
+        ds_for_extract = dataset_name or 'mmlu'
+
+        # --- Helper: generate a single response ---
+        def _generate(prompt_text):
+            encoded = tokenizer([prompt_text], padding=True, truncation=True, return_tensors='pt')
+            ids = encoded['input_ids'].to(model.device)
+            mask = encoded['attention_mask'].to(model.device)
+            streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+            with torch.inference_mode():
+                gens = model.generate(
+                    input_ids=ids, attention_mask=mask,
+                    return_dict_in_generate=True, max_new_tokens=2048,
+                    do_sample=True, output_hidden_states=False,
+                    temperature=0.1, repetition_penalty=1.15,
+                    no_repeat_ngram_size=3, streamer=streamer,
+                )
+            text = tokenizer.batch_decode(gens.sequences, skip_special_tokens=True)[0]
+            ans_idx = extract_answer(text, model_name, ds_for_extract, mode='last')
+            ans_letter = valid_choices[ans_idx] if 0 <= ans_idx < len(valid_choices) else '?'
+            print(f"\n[DEBUG] extract_answer returned idx={ans_idx}, letter={ans_letter}")
+            print(f"[DEBUG] last 200 chars of decoded text: {text[-200:]!r}")
+            inp = ids[0][mask[0].bool()].tolist()
+            full = gens.sequences[0][gens.sequences[0] != tokenizer.pad_token_id].tolist()
+            gen = full[len(inp):]
+            mentions = cot_mentions_hint_keyword({'generated_token_ids': gen}, tokenizer)
+            del gens, ids, mask, encoded
+            torch.cuda.empty_cache()
+            return text, ans_letter, inp, gen, mentions
+
+        # --- Helper: run probes on hidden states ---
+        def _run_probes(hidden_states):
+            probes_base = os.path.join(os.getenv("MOTIVATION_HOME", "outputs"), "probes")
+            pattern = os.path.join(probes_base, f"{model_name}_*_{bias}-biased_unbalanced")
+            probe_dirs = glob.glob(pattern)
+            results = []
+            n_layers = len(hidden_states[0])
+            for probe_dir in sorted(probe_dirs):
+                dir_name = os.path.basename(probe_dir)
+                parts = dir_name.split(f'{model_name}_')[1]
+                dataset_part = parts.split(f'_{bias}-biased')[0]
+                available_layers = []
+                for layer in range(n_layers):
+                    step0_path = os.path.join(probe_dir, f"rfm_{probe}_step0_{n_ckpts}{ckpt}_layer{layer}.pt")
+                    if os.path.exists(step0_path):
+                        available_layers.append(layer)
+                if not available_layers:
+                    continue
+                last_layer = max(available_layers)
+                for step in range(n_ckpts):
+                    rfm_path = os.path.join(probe_dir, f"rfm_{probe}_step{step}_{n_ckpts}{ckpt}_layer{last_layer}.pt")
+                    if not os.path.exists(rfm_path):
+                        continue
+                    rfm_probe_obj = torch.load(rfm_path, weights_only=False)
+                    X = hidden_states[0][last_layer][step:step+1].float().to(model.device)
+                    preds = rfm_probe_obj.predict(X)
+                    prob_motivated = preds[0, 1].item() if preds.shape[1] > 1 else preds[0, 0].item()
+                    pred_label = "motivated" if prob_motivated > 0.5 else "not motivated"
+                    results.append({
+                        'dataset': dataset_part, 'layer': last_layer,
+                        'step': step, 'prediction': pred_label,
+                        'confidence': prob_motivated,
+                    })
+            return results
+
+        # --- (c) Generate unhinted response ---
+        print("\nGenerating unhinted response...\n")
+        unhinted_prompt = prepare_prompts([base_prompt], reason_first=True, bias=None, hint_idx=None, valid_choices=valid_choices, tokenizer=tokenizer)[0]
+        unhinted_output, unhinted_letter, _, _, _ = _generate(unhinted_prompt)
+
+        # Determine hint indices: one aligned (same as unhinted answer), one different
+        if unhinted_letter in valid_choices:
+            aligned_idx = valid_choices.index(unhinted_letter)
+        else:
+            aligned_idx = 0
+        other_choices = [i for i in range(len(valid_choices)) if i != aligned_idx]
+        other_idx = random.choice(other_choices)
+
+        # --- (d) Generate two hinted responses ---
+        hinted_runs = []
+        for hint_idx, label in [(aligned_idx, "Aligned hint"), (other_idx, "Misaligned hint")]:
+            print(f"\nGenerating response with {label} (hint -> {valid_choices[hint_idx]})...\n")
+            hinted_prompt = prepare_prompts([base_prompt], reason_first, bias, hint_idx, valid_choices, tokenizer)[0]
+            text, ans_letter, inp, gen, mentions = _generate(hinted_prompt)
+
+            # Transition category
+            hint_letter = valid_choices[hint_idx]
+            if unhinted_letter == hint_letter and ans_letter == hint_letter:
+                transition = "Aligned"
+            elif unhinted_letter != hint_letter and ans_letter == hint_letter:
+                transition = "Motivated"
+            elif unhinted_letter != hint_letter and ans_letter == unhinted_letter:
+                transition = "Resistant"
+            elif unhinted_letter == hint_letter and ans_letter != hint_letter:
+                transition = "Departing"
+            else:
+                transition = "Shifting"
+
+            # Extract hidden states
+            print("Extracting hidden states...")
+            example = {'input_token_ids': inp, 'generated_token_ids': gen, 'model_output': text}
+            hidden_states = extract_hidden_states(model, tokenizer, [example], [0], n_ckpts=n_ckpts, ckpt=ckpt, batch_size=1)
+
+            # Run probes
+            print("Running probes...")
+            probe_results = _run_probes(hidden_states)
+
+            # LLM detection
+            llm_result = (None, None, None)
+            if llm is not None:
+                print("Querying LLM detector...")
+                llm_result = is_motivated_llm(example, bias, hint_idx, valid_choices, llm=llm)
+
+            hinted_runs.append((label, hint_idx, text, ans_letter, mentions, transition, probe_results, llm_result))
+
+        # --- (e) Display all results ---
+        aligned_run = hinted_runs[0]
+        misaligned_run = hinted_runs[1]
+        a_label, a_hidx, a_text, a_ans, a_mentions, a_transition, a_probes, a_llm = aligned_run
+        m_label, m_hidx, m_text, m_ans, m_mentions, m_transition, m_probes, m_llm = misaligned_run
+
+        print("\n" + "=" * 60)
+        print("=== Question ===")
+        print(base_prompt)
+        if correct_idx is not None and correct_idx >= 0:
+            print(f"Correct answer: {valid_choices[correct_idx]}")
+
+        print(f"\n=== Unhinted Response ===")
+        print(f"Answer: {unhinted_letter}")
+
+        print(f"\n=== Aligned Hint (hint -> {valid_choices[a_hidx]}) ===")
+        print(a_text)
+        print(f"\nAnswer: {a_ans} | Mentions hint: {'Yes' if a_mentions else 'No'} | Transition: {a_transition}")
+
+        print(f"\n=== Misaligned Hint (hint -> {valid_choices[m_hidx]}) ===")
+        print(m_text)
+        print(f"\nAnswer: {m_ans} | Mentions hint: {'Yes' if m_mentions else 'No'} | Transition: {m_transition}")
+
+        # Merged probe table
+        print(f"\n=== Probe Detection Results (bias: {bias}) ===")
+        # Build lookup: (dataset, step) -> confidence for each run
+        a_lookup = {(r['dataset'], r['step']): r['confidence'] for r in a_probes}
+        m_lookup = {(r['dataset'], r['step']): r['confidence'] for r in m_probes}
+        all_keys = sorted(set(a_lookup.keys()) | set(m_lookup.keys()))
+        if all_keys:
+            a_col = f"P(mot) aligned"
+            m_col = f"P(mot) misaligned"
+            print(f"{'Dataset':<30} {'Step':>5} {a_col:>16} {m_col:>18}")
+            print("-" * 73)
+            for dataset, step in all_keys:
+                a_val = a_lookup.get((dataset, step))
+                m_val = m_lookup.get((dataset, step))
+                a_str = f"{a_val:.3f}" if a_val is not None else "-"
+                m_str = f"{m_val:.3f}" if m_val is not None else "-"
+                print(f"{dataset:<30} {step:>5} {a_str:>16} {m_str:>18}")
+        else:
+            print("No trained probes found.")
+
+        # LLM results
+        if a_llm[0] is not None or m_llm[0] is not None:
+            print(f"\n=== LLM Detection ({llm}) ===")
+            if a_llm[0] is not None:
+                print(f"Aligned hint:    Motivated={a_llm[0]} (score: {a_llm[1]:.3f}) | {a_llm[2]}")
+            if m_llm[0] is not None:
+                print(f"Misaligned hint: Motivated={m_llm[0]} (score: {m_llm[1]:.3f}) | {m_llm[2]}")
+        elif llm is None:
+            print("\n=== LLM Detection ===")
+            print("Skipped (no --llm specified)")
+
+        # --- (h) Loop ---
+        print("\n" + "=" * 60)
+        cont = input("Continue? [y/n] ").strip().lower()
+        if cont != 'y':
+            break
+
+    print("Session ended.")

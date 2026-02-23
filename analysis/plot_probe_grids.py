@@ -20,13 +20,14 @@ def load_all_probe_metrics():
     conn = sqlite3.connect(PROBE_DB)
     query = """
     SELECT
-        model, dataset, bias,
+        model, dataset, bias, probe,
         layer, step,
         test_examples,
         n_zeros, n_ones,
         rfm_accuracy, rfm_auc,
         linear_accuracy, linear_auc
     FROM probe_metrics
+    WHERE typeof(layer) = 'integer' AND typeof(step) = 'integer' AND n_ckpts = 3
     """
     df = pd.read_sql_query(query, conn)
     conn.close()
@@ -50,6 +51,12 @@ def load_llm_metrics():
 def plot_heatmap(data, title, output_path, metric_name, vmin=None, vmax=None,
                  test_examples=None, n_zeros=None, n_ones=None, llm_value=None, llm_label=None):
     """Plot a single heatmap."""
+    # Ensure layer and step are integers
+    data = data.copy()
+    data['layer'] = data['layer'].astype(int)
+    data['step'] = data['step'].astype(int)
+    # Deduplicate by (layer, step), keeping last occurrence
+    data = data.drop_duplicates(subset=['layer', 'step'], keep='last')
     # Get unique sorted layers and steps
     layers = sorted(data['layer'].unique())
     steps = sorted(data['step'].unique())
@@ -129,10 +136,10 @@ def main():
         key = (row['model'], row['dataset'], row['bias'])
         llm_lookup[key] = {'accuracy': row['llm_accuracy'], 'auc': row['llm_auc']}
 
-    # Group by (model, dataset, bias)
-    groups = df.groupby(['model', 'dataset', 'bias'])
+    # Group by (model, dataset, bias, probe)
+    groups = df.groupby(['model', 'dataset', 'bias', 'probe'])
 
-    for (model, dataset, bias), group_df in groups:
+    for (model, dataset, bias, probe), group_df in groups:
         # Get test_examples and distribution (should be same for all rows in group)
         test_examples = group_df['test_examples'].iloc[0] if 'test_examples' in group_df.columns else None
         n_zeros = group_df['n_zeros'].iloc[0] if 'n_zeros' in group_df.columns and pd.notna(group_df['n_zeros'].iloc[0]) else None
@@ -143,16 +150,16 @@ def main():
         llm_acc = llm_metrics.get('accuracy')
         llm_auc = llm_metrics.get('auc')
 
-        print(f"Plotting {model} / {dataset} / {bias} (n={test_examples} [{n_zeros}:{n_ones}], LLM acc={llm_acc}, auc={llm_auc})...")
+        print(f"Plotting {model} / {dataset} / {bias} / {probe} (n={test_examples} [{n_zeros}:{n_ones}], LLM acc={llm_acc}, auc={llm_auc})...")
 
         # Clean name for filename
-        name = f"{model}_{dataset}_{bias}"
+        name = f"{model}_{dataset}_{bias}_{probe}"
 
         # Plot RFM Accuracy
         acc_path = os.path.join(OUTPUT_DIR, f"{name}_rfm_accuracy.png")
         plot_heatmap(
             group_df,
-            f"RFM Accuracy: {model} / {dataset} / {bias}",
+            f"RFM Accuracy: {model} / {dataset} / {bias} / {probe}",
             acc_path,
             'rfm_accuracy',
             vmin=50, vmax=100,
@@ -167,7 +174,7 @@ def main():
         auc_path = os.path.join(OUTPUT_DIR, f"{name}_rfm_auc.png")
         plot_heatmap(
             group_df,
-            f"RFM AUC: {model} / {dataset} / {bias}",
+            f"RFM AUC: {model} / {dataset} / {bias} / {probe}",
             auc_path,
             'rfm_auc',
             vmin=0.5, vmax=1.0,

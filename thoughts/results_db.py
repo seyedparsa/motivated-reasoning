@@ -12,11 +12,11 @@ DEFAULT_LLM_DB_PATH = os.path.join(os.getenv("MOTIVATION_HOME", "outputs"), "llm
 _PRIMARY_KEY = [
     "model", "dataset", "split", "bias", "probe",
     "universal_probe", "balanced", "filter_mentions", "n_ckpts", "ckpt_mode",
-    "layer", "step", "tag",
+    "layer", "step", "tag", "n_questions", "n_test_questions",
 ]
 
 _COLUMNS = _PRIMARY_KEY + [
-    "n_questions", "n_test_questions", "test_examples",
+    "test_examples",
     "n_zeros", "n_ones",
     "rfm_accuracy", "rfm_auc",
     "linear_accuracy", "linear_auc",
@@ -38,8 +38,8 @@ CREATE TABLE IF NOT EXISTS probe_metrics (
     layer           INTEGER NOT NULL,
     step            INTEGER NOT NULL,
     tag             TEXT NOT NULL DEFAULT '',
-    n_questions     INTEGER,
-    n_test_questions INTEGER,
+    n_questions     INTEGER NOT NULL,
+    n_test_questions INTEGER NOT NULL,
     test_examples   INTEGER,
     n_zeros         INTEGER,
     n_ones          INTEGER,
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS probe_metrics (
     updated_at      TEXT,
     PRIMARY KEY (model, dataset, split, bias, probe,
                  universal_probe, balanced, filter_mentions, n_ckpts, ckpt_mode,
-                 layer, step, tag)
+                 layer, step, tag, n_questions, n_test_questions)
 )
 """
 
@@ -58,6 +58,53 @@ _MIGRATE_PROBE_COLUMNS = [
     "ALTER TABLE probe_metrics ADD COLUMN n_zeros INTEGER",
     "ALTER TABLE probe_metrics ADD COLUMN n_ones INTEGER",
 ]
+
+
+def _migrate_probe_n_questions_pk(conn):
+    """Add n_questions and n_test_questions to primary key.
+
+    This allows small and large scale runs to be stored separately.
+    Existing rows with NULL values get n_questions=0, n_test_questions=0.
+    """
+    # Check current primary key by looking at table schema
+    cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='probe_metrics'")
+    result = cursor.fetchone()
+    if result is None:
+        return  # Table doesn't exist yet
+
+    create_sql = result[0]
+    if "n_questions, n_test_questions)" in create_sql:
+        return  # Already migrated
+
+    cursor = conn.execute("PRAGMA table_info(probe_metrics)")
+    old_cols = [row[1] for row in cursor.fetchall()]
+
+    select_parts = []
+    for c in _COLUMNS:
+        if c == "n_questions" and c in old_cols:
+            select_parts.append("COALESCE(n_questions, 0) AS n_questions")
+        elif c == "n_test_questions" and c in old_cols:
+            select_parts.append("COALESCE(n_test_questions, 0) AS n_test_questions")
+        elif c in old_cols:
+            select_parts.append(c)
+        else:
+            select_parts.append(f"NULL AS {c}")
+
+    insert_cols = ", ".join(_COLUMNS)
+    select_expr = ", ".join(select_parts)
+    create_new = _CREATE_TABLE.replace("IF NOT EXISTS ", "").replace("probe_metrics", "probe_metrics_new", 1)
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute(create_new)
+        conn.execute(f"INSERT INTO probe_metrics_new ({insert_cols}) SELECT {select_expr} FROM probe_metrics")
+        conn.execute("DROP TABLE probe_metrics")
+        conn.execute("ALTER TABLE probe_metrics_new RENAME TO probe_metrics")
+        conn.commit()
+        print("Migrated probe_metrics: added n_questions, n_test_questions to primary key")
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _migrate_probe_tag(conn):
@@ -145,6 +192,8 @@ def get_db(path=None):
     _migrate_probe_filter_mentions(conn)
     # Rebuild table to add tag to primary key (preserves existing rows)
     _migrate_probe_tag(conn)
+    # Rebuild table to add n_questions, n_test_questions to primary key
+    _migrate_probe_n_questions_pk(conn)
     return conn
 
 

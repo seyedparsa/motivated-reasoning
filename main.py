@@ -1,16 +1,17 @@
 import argparse
+import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from thoughts.multiple_choice import generate_responses, train_probes, evaluate_responses, evaluate_probes, evaluate_llm
+from thoughts.multiple_choice import generate_responses, train_probes, evaluate_responses, evaluate_probes, evaluate_llm, interactive_session
 
 if __name__ == "__main__":    
     parser = argparse.ArgumentParser(description="Evaluate language models on various tasks")
     parser.add_argument("--model", type=str, required=True)
-    parser.add_argument("--dataset", type=str, required=True)
+    parser.add_argument("--dataset", type=str)
     parser.add_argument("--split", type=str)
     parser.add_argument("--reason_first", action='store_true', help="Use Chain of Thought generation")
     parser.add_argument("--bias", type=str, default=None, help="Bias to apply (e.g., 'expert', 'self')")
@@ -20,8 +21,9 @@ if __name__ == "__main__":
     parser.add_argument("--train_probes", action='store_true', help="Train probes")
     parser.add_argument("--evaluate_probes", action='store_true', help="Evaluate probes")
     parser.add_argument("--evaluate_llm", action='store_true', help="Evaluate LLM baseline for has-switched detection")
+    parser.add_argument("--interactive", action='store_true', help="Interactive mode: test single questions with probes and LLM detection")
     parser.add_argument("--probe", type=str, help="probe type (e.g., 'hint-recovery', 'mot_vs_alg', 'mot_vs_res', 'mot_vs_oth)")
-    parser.add_argument("--llm", type=str, default='gpt-5-nano', help="LLM model for baseline evaluation (e.g., 'gpt-5-nano')")
+    parser.add_argument("--llm", type=str, default=None, help="LLM model for baseline evaluation (e.g., 'gpt-5-nano')")
     # parser.add_argument("--per_layer", action='store_true', help="Train a probe per layer")
     parser.add_argument("--universal", action='store_true', help="Use a universal probe")
     parser.add_argument("--balanced", action='store_true', help="Use balanced examples for probing")
@@ -41,6 +43,14 @@ if __name__ == "__main__":
     parser.add_argument("--scale", type=str, default='small', help="Scale of the dataset (small, large)")
     # parser.add_argument("--n_test", type=int,  help="Number of responses to test on")    
     args = parser.parse_args()
+
+    if args.interactive:
+        interactive_session(args.model, probe=args.probe, llm=args.llm)
+        sys.exit(0)
+
+    if not args.dataset:
+        parser.error("--dataset is required unless --interactive is used")
+
     split = args.split or ('train' if args.dataset in ['aqua', 'commonsense_qa'] else 'test')
     reason_first = args.reason_first or (args.bias in ['expert', 'metadata'])
 
@@ -97,5 +107,7 @@ if __name__ == "__main__":
     if args.evaluate_probes:
         evaluate_probes(args.model, args.dataset, split, args.n_questions, args.n_test_questions, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, filter_mentions=args.filter_mentions, batch_size=args.bs_probe, aggregate_layers=args.aggregate_layers, aggregate_steps=args.aggregate_steps, tag=args.tag)
     if args.evaluate_llm:
+        if args.llm is None:
+            parser.error("--llm is required when using --evaluate_llm")
         evaluate_llm(args.model, args.dataset, split, args.n_questions, args.n_test_questions, args.bias, args.probe, llm=args.llm, balanced=args.balanced, filter_mentions=args.filter_mentions, tag=args.tag)
 

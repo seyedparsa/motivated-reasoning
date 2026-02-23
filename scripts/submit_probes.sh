@@ -87,6 +87,7 @@ python main.py \
   --bias "${BIAS}" \
   --probe "${PROBE}" \
   --train_probes \
+  --evaluate_probes \
   --n_ckpts ${N_CKPTS} \
   --ckpt ${CKPT} \
   --scale ${SCALE} \

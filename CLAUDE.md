@@ -57,6 +57,45 @@ python main.py --generate --model qwen-3-8b --dataset arc-challenge \
     --n_questions 40 --split test
 ```
 
+## Job Submission & Monitoring (SLURM)
+
+**General submission**: Use `scripts/submit.sh` for all job types. It mirrors the `main.py` interface and iterates over models/datasets/biases/probes.
+
+```bash
+# Submit LLM evaluation jobs
+MODELS=qwen-3-8b,llama-3.1-8b,gemma-3-4b DATASETS=aqua BIAS=self PROBE=mot_vs_oth EVALUATE_LLM=1 bash scripts/submit.sh
+
+# Submit probe training + evaluation
+MODELS=all DATASETS=all BIAS=expert PROBE=mot_vs_alg TRAIN_PROBES=1 EVALUATE_PROBES=1 bash scripts/submit.sh
+
+# Submit generation
+MODELS=qwen-3-8b DATASETS=mmlu GENERATE=1 REASON_FIRST=1 bash scripts/submit.sh
+
+# Override SLURM defaults
+TIME=16:00:00 MEM=200g GPUS=2 MODELS=qwen-3-8b DATASETS=mmlu TRAIN_PROBES=1 bash scripts/submit.sh
+```
+
+**Key environment variables for `submit.sh`**:
+- `MODELS`, `DATASETS`, `BIAS`, `PROBE`: Comma-separated lists or `all`
+- Actions: `GENERATE=1`, `EVALUATE=1`, `TRAIN_PROBES=1`, `EVALUATE_PROBES=1`, `EVALUATE_LLM=1`
+- SLURM: `TIME` (default 08:00:00), `MEM` (100g), `GPUS` (1), `EXCLUDE` (bad nodes)
+- Options: `BALANCED`, `FILTER_MENTIONS`, `UNIVERSAL`, `REASON_FIRST`, `SCALE`, `N_CKPTS`, `CKPT`, `TAG`, `LLM`, `HINT_IDX`
+- `NO_UPDATE_LAST=1`: Don't update `.last_submit` tracker
+
+**Monitoring**: Use `scripts/monitor.sh` to check job status. It reads the first job ID from `scripts/.last_submit` and reports running, completed, failed, and stuck jobs.
+
+```bash
+bash scripts/monitor.sh
+```
+
+## Results Databases
+
+Results are stored in SQLite databases at `/work/hdd/bbjr/pmirtaheri/motivated/`:
+- `probe_metrics.db` — Probe training/evaluation results (RFM and linear accuracy/AUC per model/dataset/bias/probe/layer/step)
+- `llm_metrics.db` — LLM baseline evaluation results
+
+Use `TAG` in `submit.sh` to differentiate experimental runs (tag is part of the primary key).
+
 ## Architecture
 
 **Entry Point**: `main.py` - CLI for generation, evaluation, and probe training

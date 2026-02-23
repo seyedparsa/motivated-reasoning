@@ -479,9 +479,13 @@ def train_rfm_probe_on_concept(train_X, train_y, val_X, val_y,
     best_model = None
     maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy', 'top_agop_vectors_ols_auc'])
     best_score = float('-inf') if maximize_metric else float('inf')
+    combo_idx = 0
+    total_combos = len(search_space['regs']) * len(search_space['bws']) * len(search_space['center_grads'])
     for reg in search_space['regs']:
         for bw in search_space['bws']:
             for center_grads in search_space['center_grads']:
+                combo_idx += 1
+                print(f"  RFM combo {combo_idx}/{total_combos}: reg={reg}, bw={bw}, center_grads={center_grads}", flush=True)
                 try:
                     rfm_params = {
                         'model': {
@@ -499,10 +503,12 @@ def train_rfm_probe_on_concept(train_X, train_y, val_X, val_y,
                         }
                     }
                     model = RFM(**rfm_params['model'], device='cuda')
-                    model.fit((train_X, train_y), 
-                              (val_X, val_y), 
+                    print(f"    Fitting RFM model...", flush=True)
+                    model.fit((train_X, train_y),
+                              (val_X, val_y),
                               **rfm_params['fit']
                             )
+                    print(f"    RFM fit complete", flush=True)
 
                     if tuning_metric == 'top_agop_vectors_ols_auc':
                         top_k = hyperparams['n_components']
