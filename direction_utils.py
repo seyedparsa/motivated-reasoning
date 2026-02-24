@@ -95,19 +95,22 @@ def compute_prediction_metrics(preds, labels, classification_threshold=0.5):
     if isinstance(labels, torch.Tensor):
         labels = labels.cpu().numpy()
 
-    auc_macro = roc_auc_score(labels, preds, average='macro')
-    auc_micro = roc_auc_score(labels, preds, average='micro')
-    auc_weighted = roc_auc_score(labels, preds, average='weighted')
-    auc_samples = roc_auc_score(labels, preds, average='samples')
-    pos_labels = labels[:, 1]
-    pos_preds = preds[:, 1]
-    auc_binary_pos = roc_auc_score(pos_labels, pos_preds)
-    neg_labels = labels[:, 0]
-    neg_preds = preds[:, 0]
-    auc_binary_neg = roc_auc_score(neg_labels, neg_preds)
+    # if num_classes > 2:
+    #     auc_macro = roc_auc_score(labels, preds, average='macro')
+    #     auc_micro = roc_auc_score(labels, preds, average='micro')
+    #     auc_weighted = roc_auc_score(labels, preds, average='weighted')
+    #     auc_samples = roc_auc_score(labels, preds, average='samples')
+    #     print(f"auc_macro: {auc_macro}, auc_micro: {auc_micro}, auc_weighted: {auc_weighted}, auc_samples: {auc_samples}")
+    # pos_labels = labels[:, 1]
+    # pos_preds = preds[:, 1]
+    # auc_binary_pos = roc_auc_score(pos_labels, pos_preds)
+    # neg_labels = labels[:, 0]
+    # neg_preds = preds[:, 0]
+    # auc_binary_neg = roc_auc_score(neg_labels, neg_preds)
     
+    auc = roc_auc_score(labels, preds)
     mse = np.mean((preds-labels)**2)
-    if num_classes == 1:  # Binary classification
+    if num_classes == 1:  # Binary classification        
         preds = np.where(preds >= classification_threshold, 1, 0)
         labels = np.where(labels >= classification_threshold, 1, 0)
         acc = accuracy_fn(preds, labels)
@@ -138,7 +141,7 @@ def compute_prediction_metrics(preds, labels, classification_threshold=0.5):
         recall /= num_classes
         f1 /= num_classes
 
-    metrics = {'accuracy': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'auc_macro': auc_macro, 'auc_micro': auc_micro, 'auc_weighted': auc_weighted, 'auc_samples': auc_samples, 'auc': auc_binary_pos, 'auc_binary_neg': auc_binary_neg, 'mse': mse}
+    metrics = {'accuracy': acc, 'precision': precision, 'recall': recall, 'f1': f1, 'auc': auc, 'mse': mse} # 'auc_macro': auc_macro, 'auc_micro': auc_micro, 'auc_weighted': auc_weighted, 'auc_samples': auc_samples, 'auc': auc_binary_pos, 'auc_binary_neg': auc_binary_neg}
     return metrics
 
 def get_hidden_states(prompts, model, tokenizer, hidden_layers, forward_batch_size, rep_token=-1, all_positions=False):
@@ -384,7 +387,7 @@ def aggregate_layers(layer_outputs, train_y, val_y, test_y, agg_model='linear', 
 
     if agg_model=='rfm':
         bw_search_space = [10]
-        reg_search_space = [1e-4, 1e-3, 1e-2]
+        reg_search_space = [5e-4, 1e-3, 1e-2]
         kernel_search_space = ['l2_high_dim']
 
         search_space_size = len(bw_search_space) * len(reg_search_space) * len(kernel_search_space)
@@ -440,7 +443,7 @@ def aggregate_layers(layer_outputs, train_y, val_y, test_y, agg_model='linear', 
         agg_beta, agg_bias = best_logistic_params
 
     elif agg_model=='linear':
-        reg_search_space = [1e-4, 1e-3, 1e-2, 1e-1, 1, 1e1]
+        reg_search_space = [5e-4, 1e-3, 1e-2, 1e-1, 1, 1e1]
         best_linear_params = None
         best_linear_score = float('-inf') if maximize_metric else float('inf')
         for reg in reg_search_space:
@@ -545,7 +548,7 @@ def train_rfm_probe_on_concept(train_X, train_y, val_X, val_y,
 
 def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False, tuning_metric='auc', device='cuda'):
     print(f"Training linear probe on concept with use_bias: {use_bias}, tuning_metric: {tuning_metric}", flush=True)
-    reg_search_space = [1e-4, 1e-3, 1e-2, 1e-1, 1, 1e1]
+    reg_search_space = [1e-3, 1e-2, 1e-1, 1, 1e1]
     
     if use_bias:
         X = append_one(train_X)
@@ -568,17 +571,17 @@ def train_linear_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=False
                 XtY = batch_transpose_multiply(X, train_y)
                 beta = torch.linalg.solve(XtX + reg*torch.eye(X.shape[1], device=X.device), XtY)
             else:
-                print(f"LSTSQ")
+                # print(f"LSTSQ")
                 X = X.to(device)
                 train_y = train_y.to(device)
                 Xval = Xval.to(device)
 
                 XXt = X@X.T
-                print(f"XXt shape: {XXt.shape}")
+                # print(f"XXt shape: {XXt.shape}")
                 alpha = torch.linalg.lstsq(XXt + reg*torch.eye(X.shape[0]).to(device), train_y).solution
-                print(f"Alpha shape: {alpha.shape}")
+                # print(f"Alpha shape: {alpha.shape}")
                 beta = X.T@alpha
-                print(f"Beta shape: {beta.shape}")
+                # print(f"Beta shape: {beta.shape}")
 
             preds = Xval.to(device) @ beta
             preds_proba = preds_to_proba(preds)
@@ -620,7 +623,7 @@ def train_logistic_probe_on_concept(train_X, train_y, val_X, val_y, use_bias=Fal
         train_y_flat = train_y.squeeze(1).cpu()
     else:
         train_y_flat = train_y.argmax(dim=1).cpu()   
-
+    
     best_beta = None
     best_bias = None
     maximize_metric = (tuning_metric in ['f1', 'auc', 'accuracy'])

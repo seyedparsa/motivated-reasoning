@@ -12,14 +12,13 @@ DEFAULT_LLM_DB_PATH = os.path.join(os.getenv("MOTIVATION_HOME", "outputs"), "llm
 _PRIMARY_KEY = [
     "model", "dataset", "split", "bias", "probe",
     "universal_probe", "balanced", "filter_mentions", "n_ckpts", "ckpt_mode",
-    "layer", "step", "tag", "n_questions", "n_test_questions",
+    "layer", "step", "tag", "n_questions", "n_test_questions", "classifier",
 ]
 
 _COLUMNS = _PRIMARY_KEY + [
     "test_examples",
     "n_zeros", "n_ones",
-    "rfm_accuracy", "rfm_auc",
-    "linear_accuracy", "linear_auc",
+    "accuracy", "auc",
     "updated_at",
 ]
 
@@ -40,17 +39,16 @@ CREATE TABLE IF NOT EXISTS probe_metrics (
     tag             TEXT NOT NULL DEFAULT '',
     n_questions     INTEGER NOT NULL,
     n_test_questions INTEGER NOT NULL,
+    classifier      TEXT NOT NULL DEFAULT 'rfm',
     test_examples   INTEGER,
     n_zeros         INTEGER,
     n_ones          INTEGER,
-    rfm_accuracy    REAL,
-    rfm_auc         REAL,
-    linear_accuracy REAL,
-    linear_auc      REAL,
+    accuracy        REAL,
+    auc             REAL,
     updated_at      TEXT,
     PRIMARY KEY (model, dataset, split, bias, probe,
                  universal_probe, balanced, filter_mentions, n_ckpts, ckpt_mode,
-                 layer, step, tag, n_questions, n_test_questions)
+                 layer, step, tag, n_questions, n_test_questions, classifier)
 )
 """
 
@@ -175,6 +173,54 @@ def _migrate_probe_filter_mentions(conn):
     conn.commit()
 
 
+def _migrate_probe_classifier(conn):
+    """Normalize wide-format rows (rfm_accuracy, linear_accuracy, ...) into
+    per-classifier rows with a single accuracy/auc pair.
+
+    Each old row becomes up to two new rows (classifier='rfm' and 'linear').
+    Rows that already have the 'classifier' column are left untouched.
+    """
+    cursor = conn.execute("PRAGMA table_info(probe_metrics)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "classifier" in columns:
+        return  # Already migrated
+
+    old_cols = list(columns)
+    shared_cols = [c for c in old_cols if c not in (
+        "rfm_accuracy", "rfm_auc", "linear_accuracy", "linear_auc",
+    )]
+
+    create_sql = _CREATE_TABLE.replace("IF NOT EXISTS ", "").replace(
+        "probe_metrics", "probe_metrics_new", 1
+    )
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute(create_sql)
+        shared_select = ", ".join(shared_cols)
+        new_cols = ", ".join(shared_cols + ["classifier", "accuracy", "auc"])
+
+        for clf, acc_col, auc_col in [
+            ("rfm", "rfm_accuracy", "rfm_auc"),
+            ("linear", "linear_accuracy", "linear_auc"),
+        ]:
+            if acc_col not in old_cols:
+                continue
+            conn.execute(
+                f"INSERT INTO probe_metrics_new ({new_cols}) "
+                f"SELECT {shared_select}, '{clf}', {acc_col}, {auc_col} "
+                f"FROM probe_metrics WHERE {acc_col} IS NOT NULL"
+            )
+
+        conn.execute("DROP TABLE probe_metrics")
+        conn.execute("ALTER TABLE probe_metrics_new RENAME TO probe_metrics")
+        conn.commit()
+        print("Migrated probe_metrics: normalized to per-classifier rows")
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def get_db(path=None):
     """Open (or create) the probe metrics database and return a connection."""
     path = path or DEFAULT_DB_PATH
@@ -194,6 +240,8 @@ def get_db(path=None):
     _migrate_probe_tag(conn)
     # Rebuild table to add n_questions, n_test_questions to primary key
     _migrate_probe_n_questions_pk(conn)
+    # Normalize wide-format rows to per-classifier rows
+    _migrate_probe_classifier(conn)
     return conn
 
 

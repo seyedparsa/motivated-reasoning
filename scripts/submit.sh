@@ -59,7 +59,7 @@ NO_UPDATE_LAST=${NO_UPDATE_LAST:-0}
 ALL_MODELS="qwen-3-8b,llama-3.1-8b,gemma-3-4b"
 ALL_DATASETS="mmlu,arc-challenge,commonsense_qa,aqua"
 ALL_BIASES="expert,self,metadata"
-ALL_PROBES="hint-recovery,mot_vs_alg,mot_vs_res,mot_vs_oth"
+ALL_PROBES="h_recovery,mot_vs_alg,mot_vs_res,mot_vs_oth"
 
 # Expand "all" keywords
 [[ "${MODELS}" == "all" ]] && MODELS="${ALL_MODELS}"

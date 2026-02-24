@@ -1467,7 +1467,7 @@ def label_CoTs(model_name, dataset_name, split, n_load, offset, bias, probe, bal
 
         if probe in ['own', 'gt']:
             raise NotImplementedError("Own and GT detection not implemented yet.")
-        elif probe == 'hint-recovery':
+        elif probe == 'h_recovery':
             hinted = []
             for h, biased_example in enumerate(biased_examples):
                 if filter_mentions and cot_mentions_hint_keyword(biased_example, tokenizer):
@@ -1757,10 +1757,10 @@ def get_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt, batch_s
     hidden_states = extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt=ckpt, batch_size=batch_size)
 
     # Save to cache
-    save_hidden_states_cache(hidden_states, labels, cache_path)
+    # save_hidden_states_cache(hidden_states, labels, cache_path)
 
     # Load from cache to ensure consistency (e.g., if we switch to fp16 storage later)
-    hidden_states, _ = load_hidden_states_cache(cache_path)
+    # hidden_states, _ = load_hidden_states_cache(cache_path)
     return hidden_states
 
 
@@ -1784,10 +1784,14 @@ def extract_Xy(hidden_states, labels, indices=None, layer=None, step=None, devic
         # X = torch.cat([hidden_states[i][layer] for i in indices], dim=0).float()
         # y = torch.cat([torch.tensor([labels[i]] * n_ckpt, dtype=torch.long) for i in indices], dim=0)
     # if n_choices > 2:
-    y = torch.nn.functional.one_hot(y, num_classes=n_choices).float()
+    # y = torch.nn.functional.one_hot(y, num_classes=n_choices).float()
     # else:
     #     y = y.unsqueeze(1).float()
     #     print(f"y shape: {y.shape}")
+    if n_choices > 2:
+        y = torch.nn.functional.one_hot(y, num_classes=n_choices).float()
+    else:
+        y = y.unsqueeze(1).float()        
     if device is not None:
         X, y = X.to(device), y.to(device)        
     return X, y
@@ -1911,19 +1915,22 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                 logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
                 print(f"Logistic probe loaded from {logistic_probe_path}")
             except FileNotFoundError:
-                logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, num_classes=n_choices, tuning_metric='auc')
-                torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
-                print(f"Logistic probe saved to {logistic_probe_path}")
-                # print(f"Logistic probe not found, skipping...")
+                # logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                # torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+                # print(f"Logistic probe saved to {logistic_probe_path}")
+                logistic_probe_beta, logistic_probe_bias = None, None
+                print(f"Logistic probe not found, skipping...")
             print(f"Layer {layer}: Universal probes ready, computing metrics...")
-            rfm_val_metrics = compute_prediction_metrics(rfm_probe.predict(val_data), val_y)
-            linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
-            linear_val_metrics = compute_prediction_metrics(linear_preds, val_y)
-            logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
-            logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
-            logistic_val_metrics = compute_prediction_metrics(logistic_exp_logits, val_y)
-            print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}")
-            print(f"Layer {layer}: RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
+            # rfm_val_metrics = compute_prediction_metrics(rfm_probe.predict(val_data), val_y)
+            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias                
+            # linear_val_metrics = compute_prediction_metrics(linear_preds, val_y)
+            # logistic_logits = val_data @ logistic_probe_beta + logistic_probe_bias
+            # logistic_exp_logits = torch.exp(logistic_logits - logistic_logits.max(dim=1, keepdim=True).values)            
+            # logistic_preds = torch.sigmoid(logistic_logits)
+            # logistic_val_metrics = compute_prediction_metrics(logistic_preds, val_y)
+            # print(f"Layer {layer}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}")
+            # print(f"Layer {layer}: RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
+
         for step in range(n_ckpts): 
             val_data, val_y = extract_Xy(hidden_states, labels, val_indices, layer=layer, step=step, device=model.device)
             if not universal_probe:            
@@ -1956,17 +1963,35 @@ def train_probes(model_name, dataset_name, split, n_questions, bias, probe, n_ck
                     linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
                     print(f"Linear probe loaded from {linear_probe_path}")
                 except (FileNotFoundError, EOFError, RuntimeError):
-                    # linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
-                    # torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
-                    # print(f"Linear probe saved to {linear_probe_path}")
-                    print(f"Linear probe not found, skipping...")
+                    linear_probe_beta, linear_probe_bias = train_linear_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                    torch.save({'beta': linear_probe_beta, 'bias': linear_probe_bias}, linear_probe_path)
+                    print(f"Linear probe saved to {linear_probe_path}")
+                    # print(f"Linear probe not found, skipping...")
+                try:
+                    if not load_if_exists:
+                        raise FileNotFoundError
+                    state = torch.load(logistic_probe_path, weights_only=False)
+                    logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                    print(f"Logistic probe loaded from {logistic_probe_path}")
+                except (FileNotFoundError, EOFError, RuntimeError):
+                    # logistic_probe_beta, logistic_probe_bias = train_logistic_probe_on_concept(train_data, train_y, val_data, val_y, use_bias=True, tuning_metric='auc')
+                    # torch.save({'beta': logistic_probe_beta, 'bias': logistic_probe_bias}, logistic_probe_path)
+                    # print(f"Logistic probe saved to {logistic_probe_path}")
+                    logistic_probe_beta, logistic_probe_bias = None, None
+                    print(f"Logistic probe not found, skipping...")
                 print(f"Layer {layer}, Step {step}: Probes ready, computing metrics...")
             rfm_preds = rfm_probe.predict(val_data)
-            # linear_preds = val_data @ linear_probe_beta + linear_probe_bias
-            # linear_val_metrics = compute_prediction_metrics(preds_to_proba(linear_preds), val_y)
+            linear_preds = preds_to_proba(val_data @ linear_probe_beta + linear_probe_bias)            
             rfm_val_metrics = compute_prediction_metrics(rfm_preds, val_y)
+            linear_val_metrics = compute_prediction_metrics(linear_preds, val_y)
             print(f"Layer {layer}, Step {step}: RFM Val Acc: {rfm_val_metrics['accuracy']:.4f}, RFM Val AUC: {rfm_val_metrics['auc']:.4f}")
-            # print(f"Layer {layer}, Step {step}: Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}")
+            print(f"Layer {layer}, Step {step}: Linear Val Acc: {linear_val_metrics['accuracy']:.4f}, Linear Val AUC: {linear_val_metrics['auc']:.4f}")
+            if logistic_probe_beta is not None and logistic_probe_bias is not None:
+                logistic_preds = torch.sigmoid(val_data @ logistic_probe_beta + logistic_probe_bias)
+                logistic_val_metrics = compute_prediction_metrics(logistic_preds, val_y)
+                print(f"Layer {layer}, Step {step}: Logistic Val Acc: {logistic_val_metrics['accuracy']:.4f}, Logistic Val AUC: {logistic_val_metrics['auc']:.4f}")
+
+            
     log_done(f"train_probes: {model_name}/{dataset_name}/{bias}/{probe}")
 
 
@@ -2023,7 +2048,10 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
     log_stage("Evaluating probes")
     # Compute label distribution
     label_counts = np.bincount(labels, minlength=2)
-    n_zeros, n_ones = int(label_counts[0]), int(label_counts[1])
+    if probe == 'h_recovery':
+        n_zeros, n_ones = None, None
+    else:
+        n_zeros, n_ones = int(label_counts[0]), int(label_counts[1])
     balanced_tag = 'balanced' if balanced else 'unbalanced'
     probe_env_parts = [model_name, f"{dataset_name}-{split}-{n_questions}", f"{bias}-biased", balanced_tag]
     if filter_mentions_tag:
@@ -2083,13 +2111,27 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                     linear_probe_beta, linear_probe_bias = state['beta'], state['bias']
                 except FileNotFoundError:
                     # print(f"Linear probe not found for layer {layer}, step {step}", file=sys.stderr)
-                    linear_probe_beta, linear_probe_bias = None, None
+                    linear_probe_beta, linear_probe_bias = None, None        
+                try:
+                    state = torch.load(logistic_probe_path, weights_only=False)
+                    logistic_probe_beta, logistic_probe_bias = state['beta'], state['bias']
+                except FileNotFoundError:
+                    # print(f"Logistic probe not found for layer {layer}, step {step}", file=sys.stderr)
+                    logistic_probe_beta, logistic_probe_bias = None, None
             test_data, test_y = extract_Xy(hidden_states, labels, layer=layer, step=step, device=model.device)
             rfm_preds = rfm_probe.predict(test_data)            
             rfm_test_metrics = compute_prediction_metrics(rfm_preds, test_y)
-            if step == 0:
-                print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}, RFM Test AUC: {rfm_test_metrics['auc']:.4f}")
-
+            linear_preds = preds_to_proba(test_data @ linear_probe_beta + linear_probe_bias)
+            linear_test_metrics = compute_prediction_metrics(linear_preds, test_y)
+            print(f"Layer {layer}, Step {step}: RFM Test Acc: {rfm_test_metrics['accuracy']:.4f}, RFM Test AUC: {rfm_test_metrics['auc']:.4f}")
+            print(f"Layer {layer}, Step {step}: Linear Test Acc: {linear_test_metrics['accuracy']:.4f}, Linear Test AUC: {linear_test_metrics['auc']:.4f}")
+            if logistic_probe_beta is not None and logistic_probe_bias is not None:
+                logistic_preds = torch.sigmoid(test_data @ logistic_probe_beta + logistic_probe_bias)
+                logistic_test_metrics = compute_prediction_metrics(logistic_preds, test_y)
+                print(f"Layer {layer}, Step {step}: Logistic Test Acc: {logistic_test_metrics['accuracy']:.4f}, Logistic Test AUC: {logistic_test_metrics['auc']:.4f}")
+            else:
+                logistic_test_metrics = None
+            # if step == 0:      
             # Show a few example predictions (only for last layer, first step to avoid clutter)
             if layer == n_layers - 1 and step == n_ckpts - 1 and probe in ['bias', 'has-switched']:
                 n_show = min(5, len(examples))
@@ -2130,48 +2172,49 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                             #     input()                            
                 print(f"{'='*80}\n")
 
-            linear_test_metrics = {'accuracy': None, 'auc': None}
-            linear_preds = None
-            if linear_probe_beta is not None:
-                linear_preds = test_data @ linear_probe_beta + linear_probe_bias
-                linear_preds = preds_to_proba(linear_preds)
-                linear_test_metrics = compute_prediction_metrics(linear_preds, test_y)
-                print(f"Layer {layer}, Step {step}: Linear Test Acc: {linear_test_metrics['accuracy']:.4f}")
-                print(f"Layer {layer}, Step {step}: Linear Test AUC: {linear_test_metrics['auc']:.4f}")
+
             # Collect predictions for aggregation across layers and/or steps
             if aggregate_layers is not None or aggregate_steps is not None:
                 all_preds[(layer, step)] = {
                     'rfm': rfm_preds.detach().cpu(),
                     'linear': linear_preds.detach().cpu() if linear_preds is not None else None,
+                    'logistic': logistic_preds.detach().cpu() if logistic_preds is not None else None,
                     'test_y': test_y.detach().cpu(),
                 }
             test_examples = int(test_y.shape[0]) if hasattr(test_y, "shape") else len(test_y)
-            results_rows.append(
-                {
-                    "model": model_name,
-                    "dataset": dataset_name,
-                    "split": split_tag,
-                    "bias": bias_tag,
-                    "probe": probe_tag,
-                    "universal_probe": int(universal_probe),
-                    "balanced": int(balanced),
-                    "filter_mentions": int(filter_mentions),
-                    "n_ckpts": n_ckpts,
-                    "ckpt_mode": ckpt,
-                    "layer": layer,
-                    "step": step,
-                    "tag": tag,
-                    "n_questions": n_questions,
-                    "n_test_questions": n_test_questions,
-                    "test_examples": test_examples,
-                    "n_zeros": n_zeros,
-                    "n_ones": n_ones,
-                    "rfm_accuracy": rfm_test_metrics.get("accuracy"),
-                    "rfm_auc": rfm_test_metrics.get("auc"),
-                    "linear_accuracy": linear_test_metrics.get("accuracy"),
-                    "linear_auc": linear_test_metrics.get("auc"),
-                }
-            )
+            _shared = {
+                "model": model_name,
+                "dataset": dataset_name,
+                "split": split_tag,
+                "bias": bias_tag,
+                "probe": probe_tag,
+                "universal_probe": int(universal_probe),
+                "balanced": int(balanced),
+                "filter_mentions": int(filter_mentions),
+                "n_ckpts": n_ckpts,
+                "ckpt_mode": ckpt,
+                "layer": layer,
+                "step": step,
+                "tag": tag,
+                "n_questions": n_questions,
+                "n_test_questions": n_test_questions,
+                "test_examples": test_examples,
+                "n_zeros": n_zeros,
+                "n_ones": n_ones,
+            }
+            for clf_name, clf_metrics in [
+                ("rfm", rfm_test_metrics),
+                ("linear", linear_test_metrics),
+                ("logistic", logistic_test_metrics),
+            ]:
+                if clf_metrics is None:
+                    continue
+                results_rows.append({
+                    **_shared,
+                    "classifier": clf_name,
+                    "accuracy": clf_metrics.get("accuracy"),
+                    "auc": clf_metrics.get("auc"),
+                })
 
     # --- Aggregation across layers and/or steps ---
     if (aggregate_layers is not None or aggregate_steps is not None) and all_preds:
@@ -2180,28 +2223,23 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
 
         def _aggregate_preds(keys, label):
             """Average predictions over a set of (layer, step) keys and return metrics."""
-            rfm_list = [all_preds[k]['rfm'] for k in keys if k in all_preds]
-            linear_list = [all_preds[k]['linear'] for k in keys if k in all_preds and all_preds[k]['linear'] is not None]
-            # Use test_y from the first key (labels are identical across aggregated axis)
             test_y_agg = all_preds[keys[0]]['test_y']
             test_examples_agg = int(test_y_agg.shape[0])
 
-            rfm_agg_metrics = {'accuracy': None, 'auc': None}
-            if rfm_list:
-                rfm_mean = torch.stack(rfm_list, dim=0).mean(dim=0)
-                rfm_agg_metrics = compute_prediction_metrics(rfm_mean, test_y_agg)
-                print(f"{label}: RFM Test Acc: {rfm_agg_metrics['accuracy']:.4f}, AUC: {rfm_agg_metrics['auc']:.4f}  ({len(rfm_list)} probes)")
+            agg_metrics = {}
+            for clf in ('rfm', 'linear', 'logistic'):
+                pred_list = [all_preds[k][clf] for k in keys
+                             if k in all_preds and all_preds[k].get(clf) is not None]
+                if pred_list:
+                    mean_preds = torch.stack(pred_list, dim=0).mean(dim=0)
+                    m = compute_prediction_metrics(mean_preds, test_y_agg)
+                    print(f"{label}: {clf.upper()} Test Acc: {m['accuracy']:.4f}, AUC: {m['auc']:.4f}  ({len(pred_list)} probes)")
+                    agg_metrics[clf] = m
 
-            linear_agg_metrics = {'accuracy': None, 'auc': None}
-            if linear_list:
-                linear_mean = torch.stack(linear_list, dim=0).mean(dim=0)
-                linear_agg_metrics = compute_prediction_metrics(linear_mean, test_y_agg)
-                print(f"{label}: Linear Test Acc: {linear_agg_metrics['accuracy']:.4f}, AUC: {linear_agg_metrics['auc']:.4f}  ({len(linear_list)} probes)")
+            return agg_metrics, test_examples_agg
 
-            return rfm_agg_metrics, linear_agg_metrics, test_examples_agg
-
-        def _make_agg_row(layer_val, step_val, rfm_m, lin_m, n_ex):
-            return {
+        def _make_agg_rows(layer_val, step_val, agg_metrics, n_ex):
+            shared = {
                 "model": model_name, "dataset": dataset_name, "split": split_tag,
                 "bias": bias_tag, "probe": probe_tag,
                 "universal_probe": int(universal_probe), "balanced": int(balanced),
@@ -2210,11 +2248,18 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 "layer": layer_val, "step": step_val, "tag": tag,
                 "n_questions": n_questions, "n_test_questions": n_test_questions,
                 "test_examples": n_ex, "n_zeros": n_zeros, "n_ones": n_ones,
-                "rfm_accuracy": rfm_m.get("accuracy"), "rfm_auc": rfm_m.get("auc"),
-                "linear_accuracy": lin_m.get("accuracy"), "linear_auc": lin_m.get("auc"),
             }
+            rows = []
+            for clf_name, clf_m in agg_metrics.items():
+                rows.append({
+                    **shared,
+                    "classifier": clf_name,
+                    "accuracy": clf_m.get("accuracy"),
+                    "auc": clf_m.get("auc"),
+                })
+            return rows
 
-        # Aggregate across layers (one row per step)
+        # Aggregate across layers (one row per step per classifier)
         if aggregate_layers is not None:
             agg_layers = _parse_slice_spec(aggregate_layers, found_layers)
             layer_tag = f"agg_{aggregate_layers}"
@@ -2222,10 +2267,10 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 keys = [(l, step) for l in agg_layers if (l, step) in all_preds]
                 if not keys:
                     continue
-                rfm_m, lin_m, n_ex = _aggregate_preds(keys, f"Aggregate layers ({aggregate_layers}), Step {step}")
-                results_rows.append(_make_agg_row(layer_tag, step, rfm_m, lin_m, n_ex))
+                agg_m, n_ex = _aggregate_preds(keys, f"Aggregate layers ({aggregate_layers}), Step {step}")
+                results_rows.extend(_make_agg_rows(layer_tag, step, agg_m, n_ex))
 
-        # Aggregate across steps (one row per layer)
+        # Aggregate across steps (one row per layer per classifier)
         if aggregate_steps is not None:
             agg_steps = _parse_slice_spec(aggregate_steps, found_steps)
             step_tag = f"agg_{aggregate_steps}"
@@ -2233,24 +2278,24 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 keys = [(layer, s) for s in agg_steps if (layer, s) in all_preds]
                 if not keys:
                     continue
-                rfm_m, lin_m, n_ex = _aggregate_preds(keys, f"Layer {layer}, Aggregate steps ({aggregate_steps})")
-                results_rows.append(_make_agg_row(layer, step_tag, rfm_m, lin_m, n_ex))
+                agg_m, n_ex = _aggregate_preds(keys, f"Layer {layer}, Aggregate steps ({aggregate_steps})")
+                results_rows.extend(_make_agg_rows(layer, step_tag, agg_m, n_ex))
 
-        # Aggregate across both axes (single row)
+        # Aggregate across both axes (one row per classifier)
         if aggregate_layers is not None and aggregate_steps is not None:
             agg_layers = _parse_slice_spec(aggregate_layers, found_layers)
             agg_steps = _parse_slice_spec(aggregate_steps, found_steps)
             keys = [(l, s) for l in agg_layers for s in agg_steps if (l, s) in all_preds]
             if keys:
-                rfm_m, lin_m, n_ex = _aggregate_preds(keys, f"Aggregate layers ({aggregate_layers}) + steps ({aggregate_steps})")
-                results_rows.append(_make_agg_row(f"agg_{aggregate_layers}", f"agg_{aggregate_steps}", rfm_m, lin_m, n_ex))
+                agg_m, n_ex = _aggregate_preds(keys, f"Aggregate layers ({aggregate_layers}) + steps ({aggregate_steps})")
+                results_rows.extend(_make_agg_rows(f"agg_{aggregate_layers}", f"agg_{aggregate_steps}", agg_m, n_ex))
 
     if results_rows:
         upsert_rows(results_rows)
         if os.getenv("MOTIVATION_CSV"):
             os.makedirs(outputs_dir, exist_ok=True)
             df = pd.DataFrame(results_rows)
-            df.sort_values(["layer", "step"], inplace=True)
+            df.sort_values(["classifier", "layer", "step"], inplace=True)
             csv_filename = f"probe_metrics_{csv_tag}.csv"
             csv_path = os.path.join(outputs_dir, csv_filename)
             df.to_csv(csv_path, index=False)
