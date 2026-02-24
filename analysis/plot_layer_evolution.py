@@ -57,9 +57,9 @@ def load_layer_data(db_path: Path, task: str = "has-switched") -> pd.DataFrame:
     """Load layer-wise probe performance from SQLite."""
     conn = sqlite3.connect(db_path)
     query = """
-        SELECT model, dataset, bias, layer, step, rfm_auc
+        SELECT model, dataset, bias, layer, step, auc
         FROM probe_metrics
-        WHERE probe = ?
+        WHERE probe = ? AND classifier = 'rfm'
         ORDER BY model, dataset, bias, layer, step
     """
     df = pd.read_sql_query(query, conn, params=(task,))
@@ -94,7 +94,7 @@ def plot_single_config(
 
         ax.plot(
             step_data["layer"],
-            step_data["rfm_auc"],
+            step_data["auc"],
             linestyle=style["linestyle"],
             alpha=style["alpha"],
             label=style["label"],
@@ -132,7 +132,7 @@ def plot_aggregate(
 ) -> None:
     """Create aggregate layer evolution plot averaged across all configurations."""
     # Compute mean AUC across all (model, dataset, bias) for each (layer, step)
-    agg = data.groupby(["layer", "step"])["rfm_auc"].mean().reset_index()
+    agg = data.groupby(["layer", "step"])["auc"].mean().reset_index()
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -142,7 +142,7 @@ def plot_aggregate(
 
         ax.plot(
             step_data["layer"],
-            step_data["rfm_auc"],
+            step_data["auc"],
             linestyle=style["linestyle"],
             alpha=style["alpha"],
             label=style["label"],
@@ -187,7 +187,7 @@ def plot_by_model(
     # Filter to final step and aggregate by model/layer
     final_step = data["step"].max()
     final_data = data[data["step"] == final_step]
-    agg = final_data.groupby(["model", "layer"])["rfm_auc"].mean().reset_index()
+    agg = final_data.groupby(["model", "layer"])["auc"].mean().reset_index()
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -198,7 +198,7 @@ def plot_by_model(
 
         ax.plot(
             model_data["layer"],
-            model_data["rfm_auc"],
+            model_data["auc"],
             linestyle="-",
             marker="o",
             markersize=8,

@@ -87,18 +87,18 @@ def load_probe_metrics(db_path: Path, task: str = "has-switched", mode: str = "b
 
     if mode == "best":
         query = f"""
-            SELECT model, dataset, bias, MAX(rfm_auc) as probe_auc
+            SELECT model, dataset, bias, MAX(auc) as probe_auc
             FROM probe_metrics
-            WHERE probe = ? AND balanced = ? AND filter_mentions = ? {step_filter}
+            WHERE probe = ? AND classifier = 'rfm' AND balanced = ? AND filter_mentions = ? {step_filter}
             GROUP BY model, dataset, bias
         """
         df = pd.read_sql_query(query, conn, params=(task, balanced, filter_mentions))
     else:
         # Get all data first, then filter
         query = f"""
-            SELECT model, dataset, bias, layer, step, rfm_auc
+            SELECT model, dataset, bias, layer, step, auc
             FROM probe_metrics
-            WHERE probe = ? AND balanced = ? AND filter_mentions = ? {step_filter}
+            WHERE probe = ? AND classifier = 'rfm' AND balanced = ? AND filter_mentions = ? {step_filter}
         """
         df = pd.read_sql_query(query, conn, params=(task, balanced, filter_mentions))
 
@@ -126,7 +126,7 @@ def load_probe_metrics(db_path: Path, task: str = "has-switched", mode: str = "b
                     "model": model,
                     "dataset": dataset,
                     "bias": bias,
-                    "probe_auc": row["rfm_auc"]
+                    "probe_auc": row["auc"]
                 })
             df = pd.DataFrame(records)
 
@@ -145,18 +145,18 @@ def load_probe_metrics_by_step(db_path: Path, task: str, step: int, use_best_lay
         filter_mentions: Filter on filter_mentions column (default 1).
     """
     conn = sqlite3.connect(db_path)
-    base_filter = "WHERE probe = ? AND step = ? AND balanced = ? AND filter_mentions = ?"
+    base_filter = "WHERE probe = ? AND classifier = 'rfm' AND step = ? AND balanced = ? AND filter_mentions = ?"
     base_params = [task, step, balanced, filter_mentions]
     if n_questions is not None:
         query = f"""
-            SELECT model, dataset, bias, layer, rfm_auc
+            SELECT model, dataset, bias, layer, auc
             FROM probe_metrics
             {base_filter} AND n_questions = ?
         """
         df = pd.read_sql_query(query, conn, params=base_params + [n_questions])
     else:
         query = f"""
-            SELECT model, dataset, bias, layer, rfm_auc
+            SELECT model, dataset, bias, layer, auc
             FROM probe_metrics
             {base_filter}
         """
@@ -172,17 +172,15 @@ def load_probe_metrics_by_step(db_path: Path, task: str, step: int, use_best_lay
     records = []
     for (model, dataset, bias), group in df.groupby(["model", "dataset", "bias"]):
         if use_best_layer:
-            # Best layer: highest AUC
-            row = group.loc[group["rfm_auc"].idxmax()]
+            row = group.loc[group["auc"].idxmax()]
         else:
-            # Last layer: max layer value
             max_layer = group["layer"].max()
             row = group[group["layer"] == max_layer].iloc[0]
         records.append({
             "model": model,
             "dataset": dataset,
             "bias": bias,
-            "probe_auc": row["rfm_auc"]
+            "probe_auc": row["auc"]
         })
     return pd.DataFrame(records)
 
@@ -192,9 +190,9 @@ def load_probe_metrics_by_scale(db_path: Path, task: str, step: int, use_best_la
     """Load probe AUC for a specific step, including n_questions for scale comparison."""
     conn = sqlite3.connect(db_path)
     query = """
-        SELECT model, dataset, bias, layer, n_questions, rfm_auc
+        SELECT model, dataset, bias, layer, n_questions, auc
         FROM probe_metrics
-        WHERE probe = ? AND step = ? AND balanced = ? AND filter_mentions = ?
+        WHERE probe = ? AND classifier = 'rfm' AND step = ? AND balanced = ? AND filter_mentions = ?
     """
     df = pd.read_sql_query(query, conn, params=(task, step, balanced, filter_mentions))
     conn.close()
@@ -208,7 +206,7 @@ def load_probe_metrics_by_scale(db_path: Path, task: str, step: int, use_best_la
     records = []
     for (model, dataset, bias, n_questions), group in df.groupby(["model", "dataset", "bias", "n_questions"]):
         if use_best_layer:
-            row = group.loc[group["rfm_auc"].idxmax()]
+            row = group.loc[group["auc"].idxmax()]
         else:
             max_layer = group["layer"].max()
             row = group[group["layer"] == max_layer].iloc[0]
@@ -217,7 +215,7 @@ def load_probe_metrics_by_scale(db_path: Path, task: str, step: int, use_best_la
             "dataset": dataset,
             "bias": bias,
             "n_questions": n_questions,
-            "probe_auc": row["rfm_auc"]
+            "probe_auc": row["auc"]
         })
     return pd.DataFrame(records)
 
@@ -891,8 +889,12 @@ def plot_scatter_avg_over_datasets(merged_by_step: dict, output_path: Path, form
         arrow_kw = dict(arrowstyle="->", color="gray", lw=1.5)
         ax.annotate("", xy=(0.72, 0.57), xytext=(0.60, 0.57), arrowprops=arrow_kw)
         ax.annotate("", xy=(0.57, 0.72), xytext=(0.57, 0.60), arrowprops=arrow_kw)
-        ax.text(0.60, 0.555, r"LLM Better $\mathbf{(Needs\ CoT)}$", ha="left", va="top", fontsize=9, color="gray")
-        ax.text(0.555, 0.60, r"Probe Better $\mathbf{(No\ CoT\ Generation)}$", ha="right", va="bottom", fontsize=9, color="gray", rotation=90)
+        if 0 in steps:
+            ax.text(0.60, 0.555, r"LLM Better $\mathbf{(Needs\ CoT)}$", ha="left", va="top", fontsize=9, color="gray")
+            ax.text(0.555, 0.60, r"Probe Better $\mathbf{(No\ CoT\ Generation)}$", ha="right", va="bottom", fontsize=9, color="gray", rotation=90)
+        else:
+            ax.text(0.60, 0.555, "LLM Better", ha="left", va="top", fontsize=9, color="gray")
+            ax.text(0.555, 0.60, "Probe Better", ha="right", va="bottom", fontsize=9, color="gray", rotation=90)
 
         for bias in BIAS_COLORS.keys():
             color = BIAS_COLORS[bias]

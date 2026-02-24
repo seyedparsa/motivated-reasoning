@@ -20,12 +20,11 @@ def load_all_probe_metrics():
     conn = sqlite3.connect(PROBE_DB)
     query = """
     SELECT
-        model, dataset, bias, probe,
+        model, dataset, bias, probe, classifier,
         layer, step,
         test_examples,
         n_zeros, n_ones,
-        rfm_accuracy, rfm_auc,
-        linear_accuracy, linear_auc
+        accuracy, auc
     FROM probe_metrics
     WHERE typeof(layer) = 'integer' AND typeof(step) = 'integer' AND n_ckpts = 3
     """
@@ -102,9 +101,9 @@ def plot_heatmap(data, title, output_path, metric_name, vmin=None, vmax=None,
     # Add colorbar with proper label
     cbar = plt.colorbar(im, ax=ax)
     if 'auc' in metric_name.lower():
-        cbar.set_label('RFM AUC')
+        cbar.set_label('AUC')
     else:
-        cbar.set_label('RFM Accuracy (%)')
+        cbar.set_label('Accuracy (%)')
 
     # Add value annotations
     for i in range(len(layers)):
@@ -155,37 +154,40 @@ def main():
         # Clean name for filename
         name = f"{model}_{dataset}_{bias}_{probe}"
 
-        # Plot RFM Accuracy
-        acc_path = os.path.join(OUTPUT_DIR, f"{name}_rfm_accuracy.png")
-        plot_heatmap(
-            group_df,
-            f"RFM Accuracy: {model} / {dataset} / {bias} / {probe}",
-            acc_path,
-            'rfm_accuracy',
-            vmin=50, vmax=100,
-            test_examples=test_examples,
-            n_zeros=n_zeros,
-            n_ones=n_ones,
-            llm_value=llm_acc,
-            llm_label="Acc"
-        )
+        for clf_name, clf_df in group_df.groupby("classifier"):
+            clf_label = clf_name.upper()
 
-        # Plot RFM AUC
-        auc_path = os.path.join(OUTPUT_DIR, f"{name}_rfm_auc.png")
-        plot_heatmap(
-            group_df,
-            f"RFM AUC: {model} / {dataset} / {bias} / {probe}",
-            auc_path,
-            'rfm_auc',
-            vmin=0.5, vmax=1.0,
-            test_examples=test_examples,
-            n_zeros=n_zeros,
-            n_ones=n_ones,
-            llm_value=llm_auc,
-            llm_label="AUC"
-        )
+            # Plot Accuracy
+            acc_path = os.path.join(OUTPUT_DIR, f"{name}_{clf_name}_accuracy.png")
+            plot_heatmap(
+                clf_df,
+                f"{clf_label} Accuracy: {model} / {dataset} / {bias} / {probe}",
+                acc_path,
+                'accuracy',
+                vmin=50, vmax=100,
+                test_examples=test_examples,
+                n_zeros=n_zeros,
+                n_ones=n_ones,
+                llm_value=llm_acc,
+                llm_label="Acc"
+            )
 
-    print(f"\nSaved {len(groups) * 2} plots to {OUTPUT_DIR}")
+            # Plot AUC
+            auc_path = os.path.join(OUTPUT_DIR, f"{name}_{clf_name}_auc.png")
+            plot_heatmap(
+                clf_df,
+                f"{clf_label} AUC: {model} / {dataset} / {bias} / {probe}",
+                auc_path,
+                'auc',
+                vmin=0.5, vmax=1.0,
+                test_examples=test_examples,
+                n_zeros=n_zeros,
+                n_ones=n_ones,
+                llm_value=llm_auc,
+                llm_label="AUC"
+            )
+
+    print(f"\nSaved plots to {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

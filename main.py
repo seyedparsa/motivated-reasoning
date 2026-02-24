@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument("--evaluate_probes", action='store_true', help="Evaluate probes")
     parser.add_argument("--evaluate_llm", action='store_true', help="Evaluate LLM baseline for has-switched detection")
     parser.add_argument("--interactive", action='store_true', help="Interactive mode: test single questions with probes and LLM detection")
-    parser.add_argument("--probe", type=str, help="probe type (e.g., 'hint-recovery', 'mot_vs_alg', 'mot_vs_res', 'mot_vs_oth)")
+    parser.add_argument("--probe", type=str, help="probe type (e.g., 'h_recovery', 'mot_vs_alg', 'mot_vs_res', 'mot_vs_oth)")
     parser.add_argument("--llm", type=str, default=None, help="LLM model for baseline evaluation (e.g., 'gpt-5-nano')")
     # parser.add_argument("--per_layer", action='store_true', help="Train a probe per layer")
     parser.add_argument("--universal", action='store_true', help="Use a universal probe")

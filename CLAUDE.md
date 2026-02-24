@@ -168,6 +168,7 @@ No pytest suite. Use deterministic slices for smoke tests:
 
 ## Directories
 
+- Probe checkpoints have been moved from `/work/hdd/bbjr/pmirtaheri/motivated/probes/` to `/var/tmp/pmirtaheri/probes/` on `gh-login03` (node-local NVMe, not accessible from compute nodes)
 - `outputs/` - Generated responses, probe metrics, checkpoints
 - `figures/` - Publication figures (bias_detection/, taxonomy/)
 - `notebooks/` - Jupyter notebooks for analysis

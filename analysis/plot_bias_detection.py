@@ -68,7 +68,7 @@ def _load_best_auc_from_db(db_path: Path, task: str, step_mode: str) -> pd.DataF
     """Load best AUC per model/dataset/bias from the SQLite database."""
     from thoughts.results_db import query_df
     df = query_df(
-        "SELECT model, dataset, bias, layer, step, rfm_auc FROM probe_metrics WHERE probe = ?",
+        "SELECT model, dataset, bias, layer, step, auc FROM probe_metrics WHERE probe = ? AND classifier = 'rfm'",
         params=(task,),
         db_path=str(db_path),
     )
@@ -82,7 +82,7 @@ def _load_best_auc_from_db(db_path: Path, task: str, step_mode: str) -> pd.DataF
             step_df = group[group["step"] == group["step"].max()]
         else:
             step_df = group
-        best_row = step_df.loc[step_df["rfm_auc"].idxmax(), ["model", "dataset", "bias", "rfm_auc"]]
+        best_row = step_df.loc[step_df["auc"].idxmax(), ["model", "dataset", "bias", "auc"]]
         records.append(best_row.to_frame().T)
     combined = pd.concat(records, ignore_index=True)
     combined["bias_label"] = combined["bias"].map(BIAS_LABELS)
@@ -97,6 +97,10 @@ def _load_best_auc_from_csvs(metrics_dir: Path, task: str, step_mode: str) -> pd
         df = pd.read_csv(path)
         if df.empty:
             continue
+        # Filter to RFM classifier if column exists
+        if "classifier" in df.columns:
+            df = df[df["classifier"] == "rfm"]
+        auc_col = "auc" if "auc" in df.columns else "rfm_auc"
         if step_mode == "first":
             step_value = df["step"].min()
             step_df = df[df["step"] == step_value]
@@ -107,7 +111,9 @@ def _load_best_auc_from_csvs(metrics_dir: Path, task: str, step_mode: str) -> pd
             step_df = df
         if step_df.empty:
             continue
-        best_row = step_df.loc[step_df["rfm_auc"].idxmax(), ["model", "dataset", "bias", "rfm_auc"]]
+        best_row = step_df.loc[step_df[auc_col].idxmax(), ["model", "dataset", "bias", auc_col]]
+        if auc_col != "auc":
+            best_row = best_row.rename({auc_col: "auc"})
         records.append(best_row.to_frame().T)
     if not records:
         raise FileNotFoundError(f"No bias probe metrics found in {metrics_dir}")
@@ -119,9 +125,12 @@ def _load_best_auc_from_csvs(metrics_dir: Path, task: str, step_mode: str) -> pd
 
 def aggregate_by_bias(best_auc_df: pd.DataFrame) -> pd.DataFrame:
     """Average best AUC over datasets for each model/bias."""
+    auc_col = "auc" if "auc" in best_auc_df.columns else "rfm_auc"
     per_model_bias = (
-        best_auc_df.groupby(["model", "bias_label"])["rfm_auc"].mean().reset_index()
+        best_auc_df.groupby(["model", "bias_label"])[auc_col].mean().reset_index()
     )
+    if auc_col != "auc":
+        per_model_bias = per_model_bias.rename(columns={auc_col: "auc"})
     return per_model_bias
 
 
@@ -148,7 +157,7 @@ def plot_bias_detection(per_model_bias: pd.DataFrame, formats: List[str], suffix
             val = per_model_bias[
                 (per_model_bias["model"] == model)
                 & (per_model_bias["bias_label"] == bias)
-            ]["rfm_auc"]
+            ]["auc"]
             values.append(valiloc(val))
         bars = ax.bar(offsets, values, width=width, label=label, color=color, edgecolor="black")
         # Add value labels on top
@@ -170,9 +179,12 @@ def plot_bias_detection(per_model_bias: pd.DataFrame, formats: List[str], suffix
 
 def aggregate_by_model_dataset(best_auc_df: pd.DataFrame) -> pd.DataFrame:
     """Best AUC per model/dataset averaged across bias types."""
+    auc_col = "auc" if "auc" in best_auc_df.columns else "rfm_auc"
     per_combo = (
-        best_auc_df.groupby(["model", "dataset"])["rfm_auc"].mean().reset_index()
+        best_auc_df.groupby(["model", "dataset"])[auc_col].mean().reset_index()
     )
+    if auc_col != "auc":
+        per_combo = per_combo.rename(columns={auc_col: "auc"})
     per_combo["dataset_label"] = per_combo["dataset"].map({
         "aqua": "AQUA",
         "arc-challenge": "ARC-Challenge",
@@ -199,7 +211,7 @@ def plot_model_dataset(per_combo: pd.DataFrame, formats: List[str], suffix: str 
         for dataset in datasets:
             val = per_combo[
                 (per_combo["model"] == model) & (per_combo["dataset_label"] == dataset)
-            ]["rfm_auc"]
+            ]["auc"]
             values.append(valiloc(val))
         bars = ax.bar(offsets, values, width=width, label=label, color=color, edgecolor="black")
         # Add value labels on top

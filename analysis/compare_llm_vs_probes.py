@@ -13,6 +13,9 @@ LLM_DB = os.path.join(MOTIVATION_HOME, "llm_metrics.db")
 def load_probe_metrics(strategy="max_layer_step"):
     """Load probe metrics with different selection strategies.
 
+    Pivots per-classifier rows back to wide format (rfm_accuracy, rfm_auc,
+    linear_accuracy, linear_auc) for comparison.
+
     Args:
         strategy: "max_layer_step" - take max layer and step for each group
                   "max_rfm_auc" - take row with highest RFM AUC for each group
@@ -20,31 +23,38 @@ def load_probe_metrics(strategy="max_layer_step"):
     conn = sqlite3.connect(PROBE_DB)
 
     if strategy == "max_rfm_auc":
-        # Get the row with max RFM AUC for each (model, dataset, bias) combination
         query = """
         SELECT
             model, dataset, bias,
-            layer, step,
-            rfm_accuracy, rfm_auc,
-            linear_accuracy, linear_auc
+            layer, step, classifier,
+            accuracy, auc
         FROM probe_metrics p1
-        WHERE rfm_auc = (
-            SELECT MAX(rfm_auc) FROM probe_metrics p2
-            WHERE p2.model = p1.model
+        WHERE classifier = 'rfm' AND auc = (
+            SELECT MAX(auc) FROM probe_metrics p2
+            WHERE p2.classifier = 'rfm'
+            AND p2.model = p1.model
             AND p2.dataset = p1.dataset
             AND p2.bias = p1.bias
         )
         GROUP BY model, dataset, bias
         """
+        rfm_df = pd.read_sql_query(query, conn)
+        rfm_df = rfm_df.rename(columns={"accuracy": "rfm_accuracy", "auc": "rfm_auc"})
+        rfm_df = rfm_df.drop(columns=["classifier"], errors="ignore")
+
+        # Get matching linear rows at same layer/step
+        linear_df = pd.read_sql_query(
+            "SELECT model, dataset, bias, layer, step, accuracy, auc FROM probe_metrics WHERE classifier = 'linear'",
+            conn,
+        )
+        linear_df = linear_df.rename(columns={"accuracy": "linear_accuracy", "auc": "linear_auc"})
+        df = pd.merge(rfm_df, linear_df, on=["model", "dataset", "bias", "layer", "step"], how="left")
     else:  # max_layer_step
-        # Get the row with max layer and step for each (model, dataset, bias) combination
         query = """
         SELECT
             model, dataset, bias,
-            MAX(layer) as layer,
-            MAX(step) as step,
-            rfm_accuracy, rfm_auc,
-            linear_accuracy, linear_auc
+            layer, step, classifier,
+            accuracy, auc
         FROM probe_metrics
         WHERE layer = (
             SELECT MAX(layer) FROM probe_metrics p2
@@ -59,9 +69,15 @@ def load_probe_metrics(strategy="max_layer_step"):
             AND p3.bias = probe_metrics.bias
             AND p3.layer = probe_metrics.layer
         )
-        GROUP BY model, dataset, bias
         """
-    df = pd.read_sql_query(query, conn)
+        raw = pd.read_sql_query(query, conn)
+        rfm = raw[raw["classifier"] == "rfm"].rename(columns={"accuracy": "rfm_accuracy", "auc": "rfm_auc"})
+        linear = raw[raw["classifier"] == "linear"].rename(columns={"accuracy": "linear_accuracy", "auc": "linear_auc"})
+        key_cols = ["model", "dataset", "bias", "layer", "step"]
+        rfm = rfm.drop(columns=["classifier"], errors="ignore")
+        linear = linear.drop(columns=["classifier"], errors="ignore")
+        df = pd.merge(rfm, linear, on=key_cols, how="outer")
+
     conn.close()
     return df
 

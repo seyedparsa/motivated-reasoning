@@ -85,8 +85,13 @@ def load_best_auc_from_csvs(metrics_dir: Path, task: str, step_mode: str) -> pd.
         if step_df.empty:
             continue
 
-        # Get best row by RFM AUC
-        best_row = step_df.loc[step_df["rfm_auc"].idxmax(), ["model", "dataset", "bias", "rfm_auc"]]
+        # Filter to RFM classifier if column exists, then get best row by AUC
+        if "classifier" in step_df.columns:
+            step_df = step_df[step_df["classifier"] == "rfm"]
+        auc_col = "auc" if "auc" in step_df.columns else "rfm_auc"
+        best_row = step_df.loc[step_df[auc_col].idxmax(), ["model", "dataset", "bias", auc_col]]
+        if auc_col != "auc":
+            best_row = best_row.rename({auc_col: "auc"})
         records.append(best_row.to_frame().T)
 
     if not records:
@@ -100,9 +105,12 @@ def load_best_auc_from_csvs(metrics_dir: Path, task: str, step_mode: str) -> pd.
 
 def aggregate_by_bias(best_auc_df: pd.DataFrame) -> pd.DataFrame:
     """Average best AUC over datasets for each model/bias."""
+    auc_col = "auc" if "auc" in best_auc_df.columns else "rfm_auc"
     per_model_bias = (
-        best_auc_df.groupby(["model", "bias_label"])["rfm_auc"].mean().reset_index()
+        best_auc_df.groupby(["model", "bias_label"])[auc_col].mean().reset_index()
     )
+    if auc_col != "auc":
+        per_model_bias = per_model_bias.rename(columns={auc_col: "auc"})
     return per_model_bias
 
 
@@ -146,7 +154,7 @@ def plot_combined_tasks(
                 val = per_model_bias[
                     (per_model_bias["model"] == model)
                     & (per_model_bias["bias_label"] == bias)
-                ]["rfm_auc"]
+                ]["auc"]
                 values.append(valiloc(val))
 
             bars = ax.bar(
