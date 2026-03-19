@@ -38,8 +38,8 @@ simons_local.yml
 # Editor and IDE
 .vscode/
 
-# Temporary/scratch files
-core
+# Core dumps
+core.*
 
 # Screenshots and images
 Screenshot*.png

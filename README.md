@@ -82,14 +82,12 @@ bash scripts/monitor.sh
 
 **Entry Point**: `main.py` - CLI for generation, evaluation, and probe training
 
-**Core Package**: `thoughts/`
-- `multiple_choice.py` - Main workflow: `generate_responses()`, `evaluate_responses()`, `train_probes()`, `evaluate_probes()`
+**Core Package**: `core/`
+- `motivated_reasoning.py` - Main workflow: `generate_responses()`, `evaluate_responses()`, `train_probes()`, `evaluate_probes()`
 - `utils.py` - Model/dataset/tokenizer loading
+- `probes.py` - Hidden state extraction and probe training (RFM, linear)
 - `configs/models.json` - Supported models: Qwen3-8B, Llama-3.1-8B-Instruct, Gemma-3-4B
 - `configs/datasets.json` - Supported datasets: MMLU, ARC-Challenge, CommonsenseQA, AQuA
-
-**Supporting Modules**:
-- `direction_utils.py` - Hidden state extraction and probe training (RFM, linear)
 
 **Analysis**: `analysis/plot_*.py` - Scripts for generating publication figures
 

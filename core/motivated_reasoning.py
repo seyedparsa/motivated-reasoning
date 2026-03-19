@@ -18,8 +18,8 @@ import csv
 import pandas as pd
 
 from torch.utils.data import DataLoader, TensorDataset
-from thoughts.utils import get_choices, get_dataset, get_model, get_tokenizer
-from thoughts.results_db import upsert_rows, upsert_llm_rows
+from core.utils import get_choices, get_dataset, get_model, get_tokenizer
+from core.results_db import upsert_rows, upsert_llm_rows
 from datasets import load_from_disk, load_dataset, Dataset
 from huggingface_hub import HfApi
 from huggingface_hub.errors import HfHubHTTPError
@@ -27,7 +27,7 @@ import os
 import tempfile
 import shutil
 from collections import defaultdict
-from direction_utils import (
+from core.probes import (
     train_rfm_probe_on_concept,
     train_linear_probe_on_concept,
     train_logistic_probe_on_concept,

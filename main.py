@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from thoughts.multiple_choice import generate_responses, train_probes, evaluate_responses, evaluate_probes, evaluate_llm, interactive_session
+from core.motivated_reasoning import generate_responses, train_probes, evaluate_responses, evaluate_probes, evaluate_llm, interactive_session
 
 if __name__ == "__main__":    
     parser = argparse.ArgumentParser(description="Evaluate language models on various tasks")
