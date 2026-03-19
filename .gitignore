@@ -29,6 +29,7 @@ examples/
 scripts/.last_submit
 
 # Config and docs
+CLAUDE.md
 main.pdf
 simons.yml
 simons_local.yml
