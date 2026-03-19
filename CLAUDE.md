@@ -139,7 +139,7 @@ Use `TAG` in `submit.sh` to differentiate experimental runs (tag is part of the 
 
 Output files follow: `{model}_{dataset}_{split}_{bias}_{task}.{ext}`
 
-This enables automatic globbing in downstream analysis notebooks.
+This enables automatic globbing in downstream analysis scripts.
 
 ## Testing
 
