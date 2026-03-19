@@ -4,7 +4,11 @@ results
 __pycache__
 directions/*
 hidden_states/*
-figures/generated/
+figures/bias_detection/
+figures/layer_evolution/
+figures/probe_vs_gpt-5-nano/
+figures/rfm_vs_linear/
+figures/taxonomy/
 */*.out
 */v1
 */*/v1
