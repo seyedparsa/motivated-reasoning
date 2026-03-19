@@ -30,7 +30,6 @@ This project uses supervised probes on residual-stream activations to detect mot
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env  # fill in API keys, paths, SLURM settings
 ```
 
 ### Generation
@@ -55,11 +54,11 @@ python main.py --evaluate --model qwen-3-8b --dataset arc-challenge
 ```bash
 # Train probes
 python main.py --train_probes --model qwen-3-8b --dataset arc-challenge \
-    --probe has-switched --bias expert --n_ckpts 3 --ckpt rel
+    --probe mot_vs_alg --bias expert --n_ckpts 3 --ckpt rel
 
 # Evaluate probes
 python main.py --evaluate_probes --model qwen-3-8b --dataset arc-challenge \
-    --probe has-switched --n_test_questions 200
+    --probe mot_vs_alg --n_test_questions 200
 ```
 
 ### Interactive Mode
@@ -83,13 +82,18 @@ bash scripts/monitor.sh
 **Entry Point**: `main.py` - CLI for generation, evaluation, and probe training
 
 **Core Package**: `core/`
-- `motivated_reasoning.py` - Main workflow: `generate_responses()`, `evaluate_responses()`, `train_probes()`, `evaluate_probes()`
+- `motivated_reasoning.py` - Main workflow: `generate_responses()`, `evaluate_responses()`, `train_probes()`, `evaluate_probes()`, `evaluate_llm()`, `interactive_session()`
+- `probes.py` - Probe training and evaluation (RFM, linear, logistic)
 - `utils.py` - Model/dataset/tokenizer loading
-- `probes.py` - Hidden state extraction and probe training (RFM, linear)
-- `configs/models.json` - Supported models: Qwen3-8B, Llama-3.1-8B-Instruct, Gemma-3-4B
-- `configs/datasets.json` - Supported datasets: MMLU, ARC-Challenge, CommonsenseQA, AQuA
+- `results_db.py` - SQLite persistence for probe and LLM metrics
+- `configs/models.json` - Supported models (Qwen3-8B, Llama-3.1-8B, Gemma-3-4B, and others)
+- `configs/datasets.json` - Supported datasets (MMLU, ARC-Challenge, CommonsenseQA, AQuA, GPQA, GSM8K, MATH-500)
 
-**Analysis**: `analysis/plot_*.py` - Scripts for generating publication figures
+**Analysis**: `analysis/` - Plotting scripts for publication figures
+
+**Scripts**: `scripts/`
+- `submit.sh` - SLURM job submission (iterates over model/dataset/bias/probe combos)
+- `monitor.sh` - Job status monitoring (running/completed/failed/stuck)
 
 ## Key Patterns
 
@@ -103,6 +107,13 @@ bash scripts/monitor.sh
 **Probe Types**:
 - **RFM** (primary): Recursive Feature Machines - learns non-linear feature maps via AGOP
 - **Linear**: Ridge regression on hidden states
+- **Logistic**: Logistic regression baseline
+
+**Probe Tasks** (passed via `--probe`):
+- `h_recovery` - Hint recovery: identify which answer was hinted
+- `mot_vs_alg` - Post-hoc: motivated vs aligned
+- `mot_vs_res` - Pre-emptive: motivated vs resistant
+- `mot_vs_oth` - Motivated vs all others
 
 ## Citation
 

@@ -12,7 +12,7 @@ from datasets import load_dataset, load_from_disk
 
 
 def get_tokenizer(model_name):
-    with open("thoughts/configs/models.json", "r") as f:
+    with open("core/configs/models.json", "r") as f:
         config = json.load(f)
         model_repo = config[model_name]['repo']
 
@@ -26,7 +26,7 @@ def get_tokenizer(model_name):
 
 def get_model(model_name, device="auto"):
     print(f"Loading model: {model_name}")
-    with open("thoughts/configs/models.json", "r") as f:
+    with open("core/configs/models.json", "r") as f:
         config = json.load(f)
         model_repo = config[model_name]['repo']
 
@@ -86,7 +86,7 @@ def get_model(model_name, device="auto"):
 
 def get_dataset(dataset_name, split=None, max_size=None):
     print(f"Loading dataset: {dataset_name}")
-    with open("thoughts/configs/datasets.json", "r") as f:
+    with open("core/configs/datasets.json", "r") as f:
         config = json.load(f)
         entry = config[dataset_name]
         repo = entry['repo']
