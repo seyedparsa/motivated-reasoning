@@ -1,28 +1,28 @@
-# Detecting Motivated Reasoning in Internal Representations of Language Models
+# Catching Rationalization in the Act
 
-Code for the paper *"Detecting Motivated Reasoning in Internal Representations of Language Models"* by Parsa Mirtaheri and Mikhail Belkin (UC San Diego).
+Code for [*Catching rationalization in the act: detecting motivated reasoning before and after CoT via activation probing*](https://arxiv.org/abs/2603.17199) by Parsa Mirtaheri and Mikhail Belkin (UC San Diego).
 
 ## Abstract
 
-Large language models (LLMs) can produce chains of thought (CoT) that do not faithfully reflect their internal reasoning. When a prompt contains a hint pointing to a specific answer, the model may shift its answer toward the hinted option and rationalize that choice without acknowledging the hint -- a form of unfaithful motivated reasoning. Using supervised probes on residual-stream activations, we show that motivated reasoning leaves identifiable signatures in internal representations even when the CoT does not reveal it.
+Large language models (LLMs) can produce chains of thought (CoT) that do not accurately reflect the actual factors driving their answers. In multiple-choice settings with an injected hint favoring a particular option, models may shift their final answer toward the hinted option and produce a CoT that rationalizes the response without acknowledging the hint -- an instance of motivated reasoning. Using supervised probes trained on the model's residual stream, we show that (i) **pre-generation** probes, applied before any CoT tokens are generated, predict motivated reasoning as well as an LLM-based CoT monitor that accesses the full CoT trace, and (ii) **post-generation** probes, applied after CoT generation, outperform the same monitor.
 
 ## Problem Setup
 
 We adopt a **paired context evaluation** framework. For each multiple-choice question *q*, we construct:
-- An **unhinted prompt** x⊥(q) containing only the question
-- A **hinted prompt** xₕ(q) containing the question plus a hint suggesting answer *h*
+- An **unhinted prompt** containing only the question
+- A **hinted prompt** containing the question plus a hint suggesting answer *h*
 
-The model generates a CoT and final answer for each prompt. By comparing the final answers under the unhinted and hinted prompts, we categorize each response into one of three categories:
+The model generates a CoT and final answer for each prompt. By comparing the final answers, we categorize each response:
 
 | Category | Condition | Meaning |
 |---|---|---|
 | **Motivated** | a⊥ ≠ h, aₕ = h | Model switches its answer to match the hint |
-| **Resistant** | a⊥ ≠ h, aₕ = a⊥ | Model ignores the hint and preserves its original answer |
+| **Resistant** | a⊥ ≠ h, aₕ = a⊥ | Model ignores the hint, preserves its original answer |
 | **Aligned** | a⊥ = h, aₕ = h | Model would have chosen the hinted answer anyway |
 
-We study three types of hints:
+We use three hint types:
 
-| Hint | Description | Format |
+| Hint Type | Description | Format |
 |---|---|---|
 | Sycophancy | Expert suggestion | "An expert indicates the answer is {X}" |
 | Consistency | Prefilled model response | Assistant: "The answer is {X}" |
@@ -30,17 +30,17 @@ We study three types of hints:
 
 ## Detection Tasks
 
-1. **Hint Recovery.** Can a probe recover which answer choice was hinted from the model's residual-stream activations at the end of CoT, even when the CoT does not mention the hint?
+1. **Pre-generation motivated reasoning detection.** Can a probe predict, *before any CoT tokens are generated*, whether the model will be motivated by the hint? Our pre-generation probes achieve performance comparable to a GPT-5-nano CoT monitor that has access to the full reasoning trace.
 
-2. **Post-hoc Motivated Reasoning Detection.** Given that the model answered with the hinted choice (aₕ = h), can a probe distinguish whether the model was *motivated* by the hint or its answer was merely *aligned* with it? This is where CoT monitoring fails: both cases produce a CoT ending in the hinted answer with no mention of the hint.
+2. **Post-generation motivated reasoning detection.** Given the model's internal representations at the end of CoT, can a probe distinguish *motivated* from *aligned* cases? Our post-generation probes outperform the GPT-5-nano CoT monitor.
 
-3. **Preemptive Motivated Reasoning Detection.** Can a probe predict, *before* any CoT is generated, whether the model will follow the hint (*motivated*) or resist it (*resistant*)? This enables compute savings by identifying motivated reasoning before committing to CoT generation.
+3. **Hint recovery.** Can a probe recover the hinted choice from internal representations along the CoT? Hint-recovery accuracy follows a U-shaped pattern across CoT tokens -- high at the beginning, near chance in the middle, and rising again near the end -- suggesting the model re-engages with the hint as it approaches its final answer, even when the CoT never mentions the hint.
 
 ## Models and Benchmarks
 
-**Models:** Qwen3-8B, Llama-3.1-8B-Instruct, Gemma-3-4B-IT
+**Models:** Qwen-3-8B, Llama-3.1-8B-Instruct, Gemma-3-4B-IT
 
-**Benchmarks:** MMLU, ARC-Challenge, CommonsenseQA, AQuA-RAT
+**Benchmarks:** MMLU, ARC-Challenge, CommonsenseQA, AQuA
 
 ## Usage
 
@@ -70,7 +70,7 @@ python main.py --evaluate --model qwen-3-8b --dataset arc-challenge
 ### Probe Training and Evaluation
 
 ```bash
-# Train probes (post-hoc: motivated vs aligned)
+# Train probes (post-generation: motivated vs aligned)
 python main.py --train_probes --model qwen-3-8b --dataset arc-challenge \
     --probe mot_vs_alg --bias expert --n_ckpts 3 --ckpt rel
 
@@ -79,7 +79,7 @@ python main.py --evaluate_probes --model qwen-3-8b --dataset arc-challenge \
     --probe mot_vs_alg --n_test_questions 200
 ```
 
-Available probe tasks: `h_recovery` (hint recovery), `mot_vs_alg` (post-hoc: motivated vs aligned), `mot_vs_res` (preemptive: motivated vs resistant), `mot_vs_oth` (motivated vs all others).
+Available probe tasks: `h_recovery` (hint recovery), `mot_vs_alg` (motivated vs aligned), `mot_vs_res` (motivated vs resistant), `mot_vs_oth` (motivated vs all others).
 
 ### Interactive Mode
 
@@ -113,4 +113,15 @@ analysis/                   # Plotting scripts for paper figures
 scripts/
   submit.sh                 # SLURM job submission
   monitor.sh                # Job status monitoring
+```
+
+## Citation
+
+```bibtex
+@article{mirtaheri2025catching,
+  title={Catching rationalization in the act: detecting motivated reasoning before and after CoT via activation probing},
+  author={Mirtaheri, Parsa and Belkin, Mikhail},
+  journal={arXiv preprint arXiv:2603.17199},
+  year={2025}
+}
 ```
