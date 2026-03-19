@@ -11,7 +11,19 @@ from sklearn.metrics import roc_auc_score
 from copy import deepcopy
 from tqdm import tqdm
 
-from utils import preds_to_proba
+import torch.nn.functional as F
+
+def preds_to_proba(preds, eps=1e-3, proba_beta=50):
+    if preds.shape[1] == 1:
+        activated = F.softplus(preds, beta=proba_beta)
+        preds = activated - F.softplus(activated - 1, beta=proba_beta)
+    else:
+        min_preds = preds.min(dim=1, keepdim=True).values
+        max_preds = preds.max(dim=1, keepdim=True).values
+        preds = (preds - min_preds) / (max_preds - min_preds + 1e-8)
+        preds = torch.clamp(preds, eps, 1-eps)
+        preds /= preds.sum(dim=1, keepdim=True)
+    return preds
 
 # For scaling linear probe beyond ~50k datapoints.
 def batch_transpose_multiply(A, B, mb_size=5000):

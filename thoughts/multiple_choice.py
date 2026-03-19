@@ -32,12 +32,10 @@ from direction_utils import (
     train_linear_probe_on_concept,
     train_logistic_probe_on_concept,
     compute_prediction_metrics,
+    preds_to_proba,
 )
-# from torch.serialization import safe_globals
 
 from xrfm import RFM
-
-from utils import split_indices, preds_to_proba
 from contextlib import redirect_stdout, redirect_stderr, contextmanager
 from sklearn.metrics import roc_auc_score
 
