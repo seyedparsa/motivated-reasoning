@@ -6,6 +6,12 @@ Code for [*Catching rationalization in the act: detecting motivated reasoning be
 
 Large language models (LLMs) can produce chains of thought (CoT) that do not accurately reflect the actual factors driving their answers. In multiple-choice settings with an injected hint favoring a particular option, models may shift their final answer toward the hinted option and produce a CoT that rationalizes the response without acknowledging the hint -- an instance of motivated reasoning. Using supervised probes trained on the model's residual stream, we show that (i) **pre-generation** probes, applied before any CoT tokens are generated, predict motivated reasoning as well as an LLM-based CoT monitor that accesses the full CoT trace, and (ii) **post-generation** probes, applied after CoT generation, outperform the same monitor.
 
+<p align="center">
+  <img src="paper_figures/pre_generation_probe_vs_cot_monitor.png" width="700">
+</p>
+
+**Figure 1.** Pre-generation probe AUC (y-axis) vs. GPT-5-nano CoT monitor AUC (x-axis) for motivated reasoning detection. Each point is a hint type averaged across datasets. The probe operates on hidden states *before* CoT generation; the CoT monitor reads the *full* reasoning trace. Points above the diagonal indicate the probe is better.
+
 ## Problem Setup
 
 We adopt a **paired context evaluation** framework. For each multiple-choice question *q*, we construct:
