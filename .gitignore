@@ -26,6 +26,7 @@ examples/
 # Job output files
 *.err
 *.out
+scripts/.last_submit
 
 # Config and docs
 main.pdf
