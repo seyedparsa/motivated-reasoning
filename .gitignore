@@ -1,13 +1,8 @@
 logs
 results
 .ipynb_checkpoints/
-delta_setup
 __pycache__
 directions/*
-quantitative_comparisons/language_translations/
-quantitative_comparisons/program_translations/
-quantitative_comparisons/analysis/*.pdf
-quantitative_comparisons/analysis/*plots
 hidden_states/*
 figures/*
 */*.out
@@ -15,27 +10,12 @@ figures/*
 */*/v1
 old_results
 
-data/agentharm/
-data/facts/
-data/hallucinations/
-data/languages/
-data/newton/
-data/politics/
-data/reviews/
-data/sentiment/
-directions_for_v2_paper/
-notebooks/reviews.ipynb
-notebooks/politics.ipynb
-notebooks/harmful.ipynb
+data/
+notebooks/
+extension/
 
 # Archives and bundles
-bias_probe_files.zip
-has_switched_files.zip
-will_switch_files.zip
-outputs.zip
-outputs_bias_files.zip
-outputs_has-switched_files.zip
-outputs_will-switch_files.zip
+*.zip
 
 # Generated outputs
 outputs/

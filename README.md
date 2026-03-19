@@ -11,7 +11,7 @@ python main.py \
 --generate \
 --model {model} \
 --dataset {dataset} \
---reason_first 
+--reason_first
 ```
 
 Remove ```--reason_first``` to answer without CoT.
@@ -44,7 +44,7 @@ Optional:
 
 ### Probing
 ```
-python thoughts_eval.py \                                                                                                                                   
+python main.py \
 --model {model} \
 --dataset {dataset} \
 --split {split} \
@@ -64,9 +64,6 @@ python main.py \
 --bs_probe 8 \
 --n_ckpt 2
 ```
-
-
-### Steering
 
 
 ## Citation

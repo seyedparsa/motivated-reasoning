@@ -2,9 +2,6 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-import sys
-sys.path.insert(0, '/u/dbeaglehole/xrfm')
-
 from xrfm import xRFM, RFM
 from sklearn.linear_model import LogisticRegression
 

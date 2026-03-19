@@ -106,9 +106,7 @@ Use `TAG` in `submit.sh` to differentiate experimental runs (tag is part of the 
 - `configs/models.json` - Supported models: Qwen3-8B, Llama-3.1-8B-Instruct, Gemma-3-4B
 - `configs/datasets.json` - Supported datasets: MMLU, ARC-Challenge, CommonsenseQA, AQuA
 
-**Root Modules**:
-- `neural_controllers.py` - `NeuralController` class for steering and detection
-- `control_toolkits.py` - Toolkit classes (RFM, Linear, Logistic, PCA, MeanDifference)
+**Supporting Modules**:
 - `direction_utils.py` - Hidden state extraction and probe training
 
 **Data Flow**:
@@ -127,21 +125,11 @@ Use `TAG` in `submit.sh` to differentiate experimental runs (tag is part of the 
 | `self` | Consistency | Prefilled assistant response "The answer is {X}" |
 | `metadata` | Metadata | XML tags `<correct-choice>{X}</correct-choice>` |
 
-**Probe Types** (in `control_toolkits.py`):
+**Probe Types** (in `direction_utils.py`):
 - **RFM** (primary): Recursive Feature Machines - learns non-linear feature maps via AGOP
 - **Linear**: Ridge regression on hidden states
-- **Logistic**: Sklearn logistic regression
-- **MeanDifference**: Simple class-wise mean difference (binary only)
-- **PCA**: Principal component analysis on paired examples (binary only)
 
 **Layer Indexing**: Negative indices (`-1` = final layer, `-2` = second-to-last)
-
-**NeuralController Usage**:
-```python
-controller = NeuralController(model, tokenizer, control_method='rfm', n_components=5)
-controller.compute_directions(train_data, train_labels)
-controller.generate(prompt, layers_to_control=list(range(-1, -11, -1)), control_coef=0.5)
-```
 
 **Hidden States**: `Dict[int, torch.Tensor]` where keys are negative layer indices
 
@@ -171,10 +159,7 @@ No pytest suite. Use deterministic slices for smoke tests:
 - Probe checkpoints have been moved from `/work/hdd/bbjr/pmirtaheri/motivated/probes/` to `/var/tmp/pmirtaheri/probes/` on `gh-login03` (node-local NVMe, not accessible from compute nodes)
 - `outputs/` - Generated responses, probe metrics, checkpoints
 - `figures/` - Publication figures (bias_detection/, taxonomy/)
-- `notebooks/` - Jupyter notebooks for analysis
 - `analysis/` - Post-hoc analysis and plotting scripts
-- `old_outputs/` - Archive for regression comparison
-- `core/` - 1.2 GB crash dump (avoid editing)
 
 ## Paper Reference
 
