@@ -14,13 +14,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 plt.rcParams.update({
-    "font.size": 14,
-    "axes.titlesize": 18,
-    "axes.labelsize": 16,
-    "xtick.labelsize": 14,
-    "ytick.labelsize": 14,
-    "legend.fontsize": 12,
-    "legend.title_fontsize": 14,
+    "font.size": 18,
+    "axes.titlesize": 22,
+    "axes.labelsize": 20,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
+    "legend.fontsize": 16,
+    "legend.title_fontsize": 18,
 })
 
 MOTIVATION_HOME = Path(os.environ.get("MOTIVATION_HOME", "/work/hdd/bbjr/pmirtaheri/motivated"))
@@ -57,15 +57,16 @@ DATASET_ABBREV = {
 STEP_LABELS = {0: "Pre-generation", 1: "Mid-generation", 2: "Post-generation"}
 
 TASK_TITLES = {
-    "mot_vs_alg": "Post-generation",
     "mot_vs_oth": "Motivated vs Other",
     "has-switched": "Post-hoc Detection",
     "general_pregeneration": "General Pre-generation",
+    "preemptive": "Preemptive",
 }
 
 # Preset aliases: map preset name -> (actual probe task, forced step)
 TASK_PRESETS = {
     "general_pregeneration": ("mot_vs_oth", 0),
+    "preemptive": ("mot_vs_oth", 0),
 }
 
 
@@ -77,6 +78,7 @@ def load_data(db_path, task, step=None, balanced=0, filter_mentions=1):
         FROM probe_metrics
         WHERE probe = ? AND classifier IN ('rfm', 'linear')
           AND balanced = ? AND filter_mentions = ?
+          AND ckpt_mode = 'rel' AND n_ckpts = 3
     """
     df = pd.read_sql_query(query, conn, params=(task, balanced, filter_mentions))
     conn.close()
@@ -159,6 +161,49 @@ def plot_scatter(df, output_stem, formats, task, step=None):
     plt.close(fig)
 
 
+def plot_combined_scatter(df_pre, df_post, output_stem, formats):
+    """Side-by-side scatter: pre-generation (left) and post-generation (right)."""
+    fig, (ax_pre, ax_post) = plt.subplots(1, 2, figsize=(14, 7), sharey=True)
+
+    for ax, df, title in [(ax_pre, df_pre, "Pre-generation"), (ax_post, df_post, "Post-generation")]:
+        ax.plot([0.5, 1], [0.5, 1], color="gray", linestyle="--", linewidth=1, alpha=0.6)
+        ax.axhline(0.5, color="gray", linestyle=":", linewidth=0.8, alpha=0.4)
+        ax.axvline(0.5, color="gray", linestyle=":", linewidth=0.8, alpha=0.4)
+
+        for _, row in df.iterrows():
+            ax.scatter(
+                row["linear_auc"], row["rfm_auc"],
+                color=MODEL_COLORS.get(row["model"], "black"),
+                marker="o",
+                s=100, edgecolors="white", linewidths=0.5, zorder=3, alpha=0.8,
+            )
+
+        ax.set_xlabel("Linear Probe AUC")
+        ax.set_xlim(0.5, 1.02)
+        ax.set_ylim(0.5, 1.02)
+        ax.set_aspect("equal")
+        ax.grid(True, alpha=0.3)
+        ax.set_title(title)
+
+    ax_pre.set_ylabel("RFM Probe AUC")
+
+    # Single legend
+    model_handles = [
+        plt.Line2D([0], [0], marker="o", color="w",
+                    markerfacecolor=MODEL_COLORS[m], markersize=10, label=MODEL_LABELS[m])
+        for m in MODEL_COLORS if m in df_pre["model"].values or m in df_post["model"].values
+    ]
+    ax_post.legend(handles=model_handles, title="Model", loc="upper left", framealpha=0.9)
+
+    fig.tight_layout()
+    for fmt in formats:
+        out = OUTPUT_DIR / f"{output_stem}.{fmt}"
+        dpi = 200 if fmt == "png" else 300
+        fig.savefig(out, dpi=dpi, bbox_inches="tight")
+        print(f"Saved: {out}")
+    plt.close(fig)
+
+
 def plot_grouped_bar(df, output_stem, formats, task, step=None):
     """Grouped bar chart: side-by-side RFM vs Linear AUC per condition."""
     df = df.copy()
@@ -222,6 +267,8 @@ def parse_args():
                         help="Probe task (default: mot_vs_alg).")
     parser.add_argument("--step", type=int, default=None,
                         help="CoT step to use (0=pre, 1=mid, 2=post). Default: last step.")
+    parser.add_argument("--combined", action="store_true",
+                        help="Generate combined pre+post scatter for the given task.")
     return parser.parse_args()
 
 
@@ -240,6 +287,17 @@ def main():
     else:
         probe_task = task_name
         step = args.step
+
+    if args.combined:
+        df_pre = load_data(db_path, task=probe_task, step=0)
+        df_post = load_data(db_path, task=probe_task, step=None)
+        if df_pre.empty or df_post.empty:
+            print("No data found for combined plot.")
+            return
+        print(f"Combined: {len(df_pre)} pre-gen, {len(df_post)} post-gen conditions")
+        stem = f"rfm_vs_linear_{task_name}_combined"
+        plot_combined_scatter(df_pre, df_post, stem, formats)
+        return
 
     df = load_data(db_path, task=probe_task, step=step)
     if df.empty:

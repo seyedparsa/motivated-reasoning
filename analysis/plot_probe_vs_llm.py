@@ -14,13 +14,13 @@ import pandas as pd
 
 # Set larger font sizes
 plt.rcParams.update({
-    "font.size": 14,
-    "axes.titlesize": 18,
-    "axes.labelsize": 16,
-    "xtick.labelsize": 14,
-    "ytick.labelsize": 14,
-    "legend.fontsize": 12,
-    "legend.title_fontsize": 14,
+    "font.size": 18,
+    "axes.titlesize": 22,
+    "axes.labelsize": 20,
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
+    "legend.fontsize": 16,
+    "legend.title_fontsize": 18,
 })
 
 MOTIVATION_HOME = Path(os.environ.get("MOTIVATION_HOME", "/work/hdd/bbjr/pmirtaheri/motivated"))
@@ -873,7 +873,7 @@ def plot_scatter_avg_over_datasets(merged_by_step: dict, output_path: Path, form
     axis_min = 0.5
     axis_max = 1.0
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4.5), sharex=True, sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5.5), sharex=True, sharey=True)
 
     for col_idx, model in enumerate(models):
         ax = axes[col_idx]
@@ -890,11 +890,11 @@ def plot_scatter_avg_over_datasets(merged_by_step: dict, output_path: Path, form
         ax.annotate("", xy=(0.72, 0.57), xytext=(0.60, 0.57), arrowprops=arrow_kw)
         ax.annotate("", xy=(0.57, 0.72), xytext=(0.57, 0.60), arrowprops=arrow_kw)
         if 0 in steps:
-            ax.text(0.60, 0.555, r"LLM Better $\mathbf{(Needs\ CoT)}$", ha="left", va="top", fontsize=9, color="gray")
-            ax.text(0.555, 0.60, r"Probe Better $\mathbf{(No\ CoT\ Generation)}$", ha="right", va="bottom", fontsize=9, color="gray", rotation=90)
+            ax.text(0.60, 0.555, r"CoT Monitor Better $\mathbf{(Needs\ CoT)}$", ha="left", va="top", fontsize=11, color="gray")
+            ax.text(0.555, 0.60, r"Probe Better $\mathbf{(No\ CoT\ Generation)}$", ha="right", va="bottom", fontsize=11, color="gray", rotation=90)
         else:
-            ax.text(0.60, 0.555, "LLM Better", ha="left", va="top", fontsize=9, color="gray")
-            ax.text(0.555, 0.60, "Probe Better", ha="right", va="bottom", fontsize=9, color="gray", rotation=90)
+            ax.text(0.60, 0.555, "CoT Monitor Better", ha="left", va="top", fontsize=11, color="gray")
+            ax.text(0.555, 0.60, "Probe Better", ha="right", va="bottom", fontsize=11, color="gray", rotation=90)
 
         for bias in BIAS_COLORS.keys():
             color = BIAS_COLORS[bias]
@@ -937,10 +937,10 @@ def plot_scatter_avg_over_datasets(merged_by_step: dict, output_path: Path, form
         ax.set_ylim(axis_min, axis_max)
         ax.set_aspect("equal")
         ax.grid(True, alpha=0.3)
-        ax.set_title(MODEL_LABELS.get(model, model), fontsize=13)
-        ax.set_xlabel("LLM AUC", fontsize=12)
+        ax.set_title(MODEL_LABELS.get(model, model))
+        ax.set_xlabel("CoT Monitor AUC")
         if col_idx == 0:
-            ax.set_ylabel("Probe AUC", fontsize=12)
+            ax.set_ylabel("Probe AUC")
 
     # Build legend with all bias types always shown
     BIAS_COLORS_AVG = {
@@ -950,7 +950,7 @@ def plot_scatter_avg_over_datasets(merged_by_step: dict, output_path: Path, form
     }
     bias_handles = [
         plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=color,
-                   markersize=10, label=BIAS_LABELS.get(b, b), markeredgecolor="black")
+                   markersize=12, label=BIAS_LABELS.get(b, b), markeredgecolor="black")
         for b, color in BIAS_COLORS_AVG.items()
     ]
     handles = bias_handles
@@ -958,25 +958,25 @@ def plot_scatter_avg_over_datasets(merged_by_step: dict, output_path: Path, form
     if plot_both:
         step_handles = [
             plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="none",
-                       markersize=10, label="Preemptive", markeredgecolor="gray", markeredgewidth=2),
+                       markersize=12, label="Preemptive", markeredgecolor="gray", markeredgewidth=2),
             plt.Line2D([0], [0], marker="o", color="w", markerfacecolor="gray",
-                       markersize=10, label="Post-Hoc", markeredgecolor="black"),
+                       markersize=12, label="Post-Hoc", markeredgecolor="black"),
         ]
         handles += step_handles
         labels += ["Preemptive", "Post-Hoc"]
     fig.legend(handles, labels,
-               loc="lower center", ncol=len(labels), fontsize=11,
+               loc="lower center", ncol=len(labels),
                bbox_to_anchor=(0.5, -0.02))
 
     if title:
-        fig.suptitle(title, fontsize=14, y=1.02)
+        fig.suptitle(title, y=1.02)
     fig.tight_layout()
     fig.subplots_adjust(top=0.95, bottom=0.22)
 
     for fmt in formats:
         out_path = output_path.with_suffix(f".{fmt}")
         dpi = 200 if fmt.lower() == "png" else 300
-        fig.savefig(out_path, dpi=dpi)
+        fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
         print(f"Saved: {out_path}")
 
     plt.close(fig)
@@ -1695,7 +1695,8 @@ def main():
 
         # Determine steps to plot
         step_filter = [args.step] if args.step is not None else [0, 2]
-        step_suffix = f"_step{args.step}" if args.step is not None else ""
+        step_suffix_map = {0: "_pre-gen", 1: "_mid-gen", 2: "_post-gen"}
+        step_suffix = step_suffix_map.get(args.step, f"_step{args.step}") if args.step is not None else ""
         step_name = {0: "Preemptive", 2: "Post-Hoc"}.get(args.step, "")
 
         # Bar chart: 4x3 grid, rows=datasets, cols=models, bars=hint types

@@ -160,9 +160,9 @@ def plot_aggregate(
     ax.grid(True, alpha=0.3)
 
     task_title = {
-        "bias": "Hint Recovery",
-        "has-switched": "Post-hoc Detection",
-        "will-switch": "Preemptive Detection",
+        "h_recovery": "Hint Recovery",
+        "mot_vs_alg": "Post-generation Detection",
+        "mot_vs_oth": "Pre-generation Detection",
     }.get(task, task)
     ax.set_title(f"Layer Evolution - {task_title} (Aggregated)")
 
@@ -215,9 +215,9 @@ def plot_by_model(
     ax.grid(True, alpha=0.3)
 
     task_title = {
-        "bias": "Hint Recovery",
-        "has-switched": "Post-hoc Detection",
-        "will-switch": "Preemptive Detection",
+        "h_recovery": "Hint Recovery",
+        "mot_vs_alg": "Post-generation Detection",
+        "mot_vs_oth": "Pre-generation Detection",
     }.get(task, task)
     ax.set_title(f"Layer Evolution by Model - {task_title}")
 
@@ -242,9 +242,9 @@ def parse_args():
     )
     parser.add_argument(
         "--task",
-        default="has-switched",
-        choices=["has-switched", "bias", "will-switch"],
-        help="Detection task to plot. Default: has-switched.",
+        default="mot_vs_alg",
+        choices=["mot_vs_alg", "mot_vs_oth", "h_recovery"],
+        help="Detection task to plot. Default: mot_vs_alg.",
     )
     parser.add_argument(
         "--aggregate",

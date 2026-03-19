@@ -1677,10 +1677,12 @@ def extract_hidden_states(model, tokenizer, examples, labels, n_ckpts, ckpt='rel
             elif ckpt.startswith('after'): # like after[offset]
                 offset = int(ckpt[len('after['):-1])
                 ckpt_indices = -2 + np.arange(offset, offset + n_ckpts)
-            # elif ckpt == 'prefix':
-            #     ckpt_indices = -(gen_len+1) + np.arange(0, n_ckpts) * 5
-            # elif ckpt == 'suffix':
-            #     ckpt_indices = -2 - np.arange(n_ckpts-1, -1, -1) * 5
+            elif ckpt.startswith('prefix'):  # like prefix[5] → stride-5 from beginning
+                stride = int(ckpt[len('prefix['):-1])
+                ckpt_indices = -(gen_len+1) + np.arange(0, n_ckpts) * stride
+            elif ckpt.startswith('suffix'):  # like suffix[5] → stride-5 from end
+                stride = int(ckpt[len('suffix['):-1])
+                ckpt_indices = -2 - np.arange(n_ckpts-1, -1, -1) * stride
             per_layer = []
             for layer_h in hs_tuple:  # (B,L,H)                
                 per_layer.append(layer_h[b, ckpt_indices, :].detach().cpu())
@@ -2407,11 +2409,11 @@ def interactive_session(model_name, probe='mot_vs_oth', llm=None):
         mode = input("[D]ataset or [F]ree-form? ").strip().lower()
 
         if mode.startswith('d'):
-            dataset_name = input("Dataset (mmlu/arc-challenge/commonsense_qa/aqua): ").strip()
+            dataset_name = input("Dataset, e.g. arc-challenge (mmlu/arc-challenge/commonsense_qa/aqua): ").strip()
             split = input("Split (train/test) [default: train]: ").strip() or 'train'
             dataset = get_dataset(dataset_name, split=split)
             valid_choices = get_choices(dataset_name)
-            idx = int(input(f"Question index (0-{len(dataset)-1}): ").strip())
+            idx = int(input(f"Question index, e.g. 682 (0-{len(dataset)-1}): ").strip())
             batch = {k: [dataset[idx][k]] for k in dataset[idx].keys()}
             base_prompts, corrects = extract_questions(batch, dataset_name)
             base_prompt = base_prompts[0]
@@ -2441,7 +2443,7 @@ def interactive_session(model_name, probe='mot_vs_oth', llm=None):
             continue
 
         # --- (b) Hint parameters ---
-        bias = input("Bias type (expert/self/metadata): ").strip()
+        bias = input("Bias type, e.g. metadata (expert/self/metadata): ").strip()
         if bias not in ('expert', 'self', 'metadata'):
             print(f"Invalid bias type: {bias}")
             continue
@@ -2459,9 +2461,8 @@ def interactive_session(model_name, probe='mot_vs_oth', llm=None):
                 gens = model.generate(
                     input_ids=ids, attention_mask=mask,
                     return_dict_in_generate=True, max_new_tokens=2048,
-                    do_sample=True, output_hidden_states=False,
-                    temperature=0.1, repetition_penalty=1.15,
-                    no_repeat_ngram_size=3, streamer=streamer,
+                    do_sample=False, output_hidden_states=False,
+                    streamer=streamer,
                 )
             text = tokenizer.batch_decode(gens.sequences, skip_special_tokens=True)[0]
             ans_idx = extract_answer(text, model_name, ds_for_extract, mode='last')
@@ -2522,7 +2523,9 @@ def interactive_session(model_name, probe='mot_vs_oth', llm=None):
         else:
             aligned_idx = 0
         other_choices = [i for i in range(len(valid_choices)) if i != aligned_idx]
-        other_idx = random.choice(other_choices)
+        print(f"Available misaligned hints: {', '.join(f'{valid_choices[i]} ({i})' for i in other_choices)}")
+        hint_input = input(f"Misaligned hint index, e.g. 1 ({', '.join(str(i) for i in other_choices)}): ").strip()
+        other_idx = int(hint_input) if hint_input else other_choices[0]
 
         # --- (d) Generate two hinted responses ---
         hinted_runs = []

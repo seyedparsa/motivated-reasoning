@@ -40,6 +40,8 @@ outputs_will-switch_files.zip
 # Generated outputs
 outputs/
 old_outputs/
+examples*.csv
+examples/
 
 # Job output files
 *.err
