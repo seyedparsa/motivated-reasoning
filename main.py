@@ -41,6 +41,11 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default="rel", help="Checkpointing strategy (rel, prefix, suffix)")
     parser.add_argument("--tag", type=str, default='', help="Run tag for separating experiments (e.g., 'debug', 'ablation-v2')")
     parser.add_argument("--scale", type=str, default='small', help="Scale of the dataset (small, large)")
+    # Cross-config evaluation: override eval config when it differs from train config
+    parser.add_argument("--eval_dataset", type=str, default=None, help="Dataset to evaluate on (defaults to --dataset)")
+    parser.add_argument("--eval_bias", type=str, default=None, help="Hint type to evaluate on (defaults to --bias)")
+    parser.add_argument("--eval_probe", type=str, default=None, help="Probe task for eval data (defaults to --probe)")
+    parser.add_argument("--eval_model", type=str, default=None, help="Model to evaluate on (defaults to --model)")
     # parser.add_argument("--n_test", type=int,  help="Number of responses to test on")    
     args = parser.parse_args()
 
@@ -105,7 +110,22 @@ if __name__ == "__main__":
     if args.train_probes:
         train_probes(args.model, args.dataset, split, args.n_questions, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, filter_mentions=args.filter_mentions, batch_size=args.bs_probe, tag=args.tag)
     if args.evaluate_probes:
-        evaluate_probes(args.model, args.dataset, split, args.n_questions, args.n_test_questions, args.bias, args.probe, args.n_ckpts, args.ckpt, args.universal, args.balanced, filter_mentions=args.filter_mentions, batch_size=args.bs_probe, aggregate_layers=args.aggregate_layers, aggregate_steps=args.aggregate_steps, tag=args.tag)
+        eval_model = args.eval_model or args.model
+        eval_dataset = args.eval_dataset or args.dataset
+        eval_bias = args.eval_bias or args.bias
+        eval_probe = args.eval_probe or args.probe
+        eval_split = args.split or ('train' if eval_dataset in ['aqua', 'commonsense_qa'] else 'test')
+        eval_scale = scales[args.scale][eval_dataset]
+        evaluate_probes(
+            train_model=args.model, train_dataset=args.dataset, train_split=split,
+            train_n_questions=args.n_questions, train_bias=args.bias, train_probe=args.probe,
+            eval_model=eval_model, eval_dataset=eval_dataset, eval_split=eval_split,
+            eval_offset=eval_scale['n_questions'], eval_n_test_questions=eval_scale['n_test_questions'],
+            eval_bias=eval_bias, eval_probe=eval_probe,
+            n_ckpts=args.n_ckpts, ckpt=args.ckpt, universal_probe=args.universal, balanced=args.balanced,
+            filter_mentions=args.filter_mentions, batch_size=args.bs_probe,
+            aggregate_layers=args.aggregate_layers, aggregate_steps=args.aggregate_steps, tag=args.tag,
+        )
     if args.evaluate_llm:
         if args.llm is None:
             parser.error("--llm is required when using --evaluate_llm")

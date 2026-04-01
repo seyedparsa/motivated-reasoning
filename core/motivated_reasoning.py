@@ -2017,20 +2017,42 @@ def _parse_slice_spec(spec, items):
     raise ValueError(f"Unknown aggregation spec: {spec!r}. Use 'all', 'first:K', 'last:K', or 'first_last'.")
 
 
-def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, n_ckpts, ckpt='rel', universal_probe=True, balanced=True, filter_mentions=True, batch_size=64, shuffle_seed=42, aggregate_layers=None, aggregate_steps=None, tag=''):
-    log_stage(f"evaluate_probes: {model_name}/{dataset_name}/{bias}/{probe}")
+def evaluate_probes(
+    train_model, train_dataset, train_split, train_n_questions, train_bias, train_probe,
+    eval_model, eval_dataset, eval_split, eval_offset, eval_n_test_questions, eval_bias, eval_probe,
+    n_ckpts, ckpt='rel', universal_probe=True, balanced=True, filter_mentions=True,
+    batch_size=64, shuffle_seed=42, aggregate_layers=None, aggregate_steps=None, tag='',
+):
+    # Build effective tag: DB columns represent the train side,
+    # tag records eval-side differences.
+    cross_parts = []
+    if eval_model != train_model:
+        cross_parts.append(f"eval_model={eval_model}")
+    if eval_dataset != train_dataset:
+        cross_parts.append(f"eval_dataset={eval_dataset}")
+    if eval_split != train_split:
+        cross_parts.append(f"eval_split={eval_split}")
+    if eval_bias != train_bias:
+        cross_parts.append(f"eval_bias={eval_bias}")
+    if eval_probe != train_probe:
+        cross_parts.append(f"eval_probe={eval_probe}")
+    effective_tag = '_'.join(filter(None, [tag] + cross_parts))
+
+    log_stage(f"evaluate_probes: {eval_model}/{eval_dataset}/{eval_bias}/{eval_probe}")
+    if cross_parts:
+        log_stage(f"  Cross-config: probes from {train_model}/{train_dataset}/{train_bias}/{train_probe}")
     log_stage("Loading model")
-    model, tokenizer = get_model(model_name)
-    filter_mentions_tag = _filter_mentions_tag(probe, filter_mentions)
+    model, tokenizer = get_model(eval_model)
+    filter_mentions_tag = _filter_mentions_tag(eval_probe, filter_mentions)
     log_stage("Labeling test CoTs")
     examples, labels = label_CoTs(
-        model_name=model_name,
-        dataset_name=dataset_name,
-        split=split,
-        n_load=n_test_questions,
-        offset=n_questions,
-        bias=bias,
-        probe=probe,
+        model_name=eval_model,
+        dataset_name=eval_dataset,
+        split=eval_split,
+        n_load=eval_n_test_questions,
+        offset=eval_offset,
+        bias=eval_bias,
+        probe=eval_probe,
         balanced=balanced,
         filter_mentions=filter_mentions,
         tokenizer=tokenizer,
@@ -2041,36 +2063,38 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
     log_stage("Extracting hidden states")
     hidden_states = get_hidden_states(
         model, tokenizer, examples, labels, n_ckpts, ckpt, batch_size,
-        model_name, dataset_name, split, n_load=n_test_questions, offset=n_questions,
-        bias=bias, probe=probe, balanced=balanced, filter_mentions=filter_mentions,
+        eval_model, eval_dataset, eval_split, n_load=eval_n_test_questions, offset=eval_offset,
+        bias=eval_bias, probe=eval_probe, balanced=balanced, filter_mentions=filter_mentions,
         shuffle_seed=shuffle_seed, tag=tag
     )
     log_stage("Evaluating probes")
     # Compute label distribution
     label_counts = np.bincount(labels, minlength=2)
-    if probe == 'h_recovery':
+    if eval_probe == 'h_recovery':
         n_zeros, n_ones = None, None
     else:
         n_zeros, n_ones = int(label_counts[0]), int(label_counts[1])
     balanced_tag = 'balanced' if balanced else 'unbalanced'
-    probe_env_parts = [model_name, f"{dataset_name}-{split}-{n_questions}", f"{bias}-biased", balanced_tag]
-    if filter_mentions_tag:
-        probe_env_parts.append(filter_mentions_tag)
+    # Probe directory uses training config
+    train_filter_mentions_tag = _filter_mentions_tag(train_probe, filter_mentions)
+    probe_env_parts = [train_model, f"{train_dataset}-{train_split}-{train_n_questions}", f"{train_bias}-biased", balanced_tag]
+    if train_filter_mentions_tag:
+        probe_env_parts.append(train_filter_mentions_tag)
     if tag:
         probe_env_parts.append(tag)
     probe_env = '_'.join(probe_env_parts)
     probes_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "probes", probe_env)
     n_layers = len(hidden_states[0])
     results_rows = []
-    bias_tag = bias or "none"
-    probe_tag = probe or "none"
-    split_tag = split or "unspecified"
+    train_bias_tag = train_bias or "none"
+    train_probe_tag = train_probe or "none"
+    train_split_tag = train_split or "unspecified"
     run_scope = "universal" if universal_probe else "per-step"
-    csv_parts = [model_name, dataset_name, split_tag, bias_tag, probe_tag, run_scope, f"{n_ckpts}{ckpt}"]
+    csv_parts = [eval_model, eval_dataset, train_split_tag, train_bias_tag, train_probe_tag, run_scope, f"{n_ckpts}{ckpt}"]
     if filter_mentions_tag:
         csv_parts.append(filter_mentions_tag)
-    if tag:
-        csv_parts.append(tag)
+    if effective_tag:
+        csv_parts.append(effective_tag)
     csv_tag = '_'.join(csv_parts)
     csv_tag = csv_tag.replace("/", "-")
     outputs_dir = os.path.join("outputs", "probe_metrics")
@@ -2080,7 +2104,7 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
     for layer in range(n_layers):
         log_progress(layer + 1, n_layers, f"layer {layer}")
         if universal_probe:
-            probe_config = f"{probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
+            probe_config = f"{train_probe}_universal_{n_ckpts}{ckpt}_layer{layer}"
             rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
             linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
             logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
@@ -2097,7 +2121,7 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 linear_probe_beta, linear_probe_bias = None, None
         for step in range(n_ckpts):
             if not universal_probe:
-                probe_config = f"{probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
+                probe_config = f"{train_probe}_step{step}_{n_ckpts}{ckpt}_layer{layer}"
                 rfm_probe_path = os.path.join(probes_dir, f"rfm_{probe_config}.pt")
                 linear_probe_path = os.path.join(probes_dir, f"linear_{probe_config}.pt")
                 logistic_probe_path = os.path.join(probes_dir, f"logistic_{probe_config}.pt")
@@ -2133,7 +2157,7 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 logistic_test_metrics = None
             # if step == 0:      
             # Show a few example predictions (only for last layer, first step to avoid clutter)
-            if layer == n_layers - 1 and step == n_ckpts - 1 and probe in ['bias', 'has-switched']:
+            if layer == n_layers - 1 and step == n_ckpts - 1 and eval_probe in ['bias', 'has-switched']:
                 n_show = min(5, len(examples))
                 rfm_pred_classes = rfm_preds.argmax(dim=1).cpu().numpy()
                 true_classes = test_y.argmax(dim=1).cpu().numpy()
@@ -2183,11 +2207,11 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 }
             test_examples = int(test_y.shape[0]) if hasattr(test_y, "shape") else len(test_y)
             _shared = {
-                "model": model_name,
-                "dataset": dataset_name,
-                "split": split_tag,
-                "bias": bias_tag,
-                "probe": probe_tag,
+                "model": train_model,
+                "dataset": train_dataset,
+                "split": train_split_tag,
+                "bias": train_bias_tag,
+                "probe": train_probe_tag,
                 "universal_probe": int(universal_probe),
                 "balanced": int(balanced),
                 "filter_mentions": int(filter_mentions),
@@ -2195,9 +2219,9 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
                 "ckpt_mode": ckpt,
                 "layer": layer,
                 "step": step,
-                "tag": tag,
-                "n_questions": n_questions,
-                "n_test_questions": n_test_questions,
+                "tag": effective_tag,
+                "n_questions": train_n_questions,
+                "n_test_questions": eval_n_test_questions,
                 "test_examples": test_examples,
                 "n_zeros": n_zeros,
                 "n_ones": n_ones,
@@ -2240,13 +2264,13 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
 
         def _make_agg_rows(layer_val, step_val, agg_metrics, n_ex):
             shared = {
-                "model": model_name, "dataset": dataset_name, "split": split_tag,
-                "bias": bias_tag, "probe": probe_tag,
+                "model": train_model, "dataset": train_dataset, "split": train_split_tag,
+                "bias": train_bias_tag, "probe": train_probe_tag,
                 "universal_probe": int(universal_probe), "balanced": int(balanced),
                 "filter_mentions": int(filter_mentions),
                 "n_ckpts": n_ckpts, "ckpt_mode": ckpt,
-                "layer": layer_val, "step": step_val, "tag": tag,
-                "n_questions": n_questions, "n_test_questions": n_test_questions,
+                "layer": layer_val, "step": step_val, "tag": effective_tag,
+                "n_questions": train_n_questions, "n_test_questions": eval_n_test_questions,
                 "test_examples": n_ex, "n_zeros": n_zeros, "n_ones": n_ones,
             }
             rows = []
@@ -2300,7 +2324,7 @@ def evaluate_probes(model_name, dataset_name, split, n_questions, n_test_questio
             csv_path = os.path.join(outputs_dir, csv_filename)
             df.to_csv(csv_path, index=False)
             print(f"Saved probe metrics CSV to {csv_path}")
-    log_done(f"evaluate_probes: {model_name}/{dataset_name}/{bias}/{probe}")
+    log_done(f"evaluate_probes: {eval_model}/{eval_dataset}/{eval_bias}/{eval_probe}")
 
 
 def evaluate_llm(model_name, dataset_name, split, n_questions, n_test_questions, bias, probe, llm='gpt-5-nano', balanced=True, filter_mentions=True, shuffle_seed=42, tag=''):
