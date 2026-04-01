@@ -80,18 +80,25 @@ def parse_cross_tag(tag):
     return parts
 
 
-def get_best_auc(df, groupby_cols, classifier='rfm', probe='mot_vs_alg'):
-    """Get best AUC (across layers/steps) for each group."""
+def get_last_layer_auc(df, groupby_cols, classifier='rfm', probe='mot_vs_alg', step=None):
+    """Get AUC at the last layer for each group, optionally at a specific step."""
     mask = (df['classifier'] == classifier) & (df['probe'] == probe)
-    filtered = df[mask]
-    return filtered.groupby(groupby_cols)['auc'].max().reset_index()
+    if step is not None:
+        mask = mask & (df['step'] == step)
+    filtered = df[mask].copy()
+    # Last layer = max layer per model
+    last_layers = filtered.groupby('model')['layer'].max().reset_index()
+    last_layers.columns = ['model', 'last_layer']
+    filtered = filtered.merge(last_layers, on='model')
+    filtered = filtered[filtered['layer'] == filtered['last_layer']]
+    return filtered.groupby(groupby_cols)['auc'].mean().reset_index()
 
 
-def build_cross_dataset_matrix(df, classifier='rfm', probe='mot_vs_alg'):
+def build_cross_dataset_matrix(df, classifier='rfm', probe='mot_vs_alg', step=None):
     """Build a (train_dataset x eval_dataset) AUC matrix, averaged across models and biases."""
     # Standard results (tag is empty): train_dataset == eval_dataset (diagonal)
     standard = df[df['tag'] == ''].copy()
-    standard_best = get_best_auc(standard, ['model', 'dataset', 'bias'], classifier, probe)
+    standard_auc = get_last_layer_auc(standard, ['model', 'dataset', 'bias'], classifier, probe, step)
 
     # Cross-dataset results: tag contains eval_dataset=X
     cross = df[df['tag'].str.contains('eval_dataset=', na=False) &
@@ -99,23 +106,23 @@ def build_cross_dataset_matrix(df, classifier='rfm', probe='mot_vs_alg'):
     cross['eval_dataset'] = cross['tag'].apply(
         lambda t: parse_cross_tag(t).get('eval_dataset', ''))
     cross = cross[cross['eval_dataset'] != '']
-    cross_best = get_best_auc(cross, ['model', 'dataset', 'bias', 'eval_dataset'], classifier, probe)
-    cross_best = cross_best.rename(columns={'dataset': 'train_dataset'})
+    cross_auc = get_last_layer_auc(cross, ['model', 'dataset', 'bias', 'eval_dataset'], classifier, probe, step)
+    cross_auc = cross_auc.rename(columns={'dataset': 'train_dataset'})
 
     # Build matrix
     matrix = np.full((len(DATASET_ORDER), len(DATASET_ORDER)), np.nan)
     for i, train_ds in enumerate(DATASET_ORDER):
         # Diagonal: standard results
-        diag_rows = standard_best[standard_best['dataset'] == train_ds]
+        diag_rows = standard_auc[standard_auc['dataset'] == train_ds]
         if len(diag_rows) > 0:
             matrix[i, i] = diag_rows['auc'].mean()
         # Off-diagonal: cross results
         for j, eval_ds in enumerate(DATASET_ORDER):
             if i == j:
                 continue
-            cross_rows = cross_best[
-                (cross_best['train_dataset'] == train_ds) &
-                (cross_best['eval_dataset'] == eval_ds)
+            cross_rows = cross_auc[
+                (cross_auc['train_dataset'] == train_ds) &
+                (cross_auc['eval_dataset'] == eval_ds)
             ]
             if len(cross_rows) > 0:
                 matrix[i, j] = cross_rows['auc'].mean()
@@ -123,11 +130,11 @@ def build_cross_dataset_matrix(df, classifier='rfm', probe='mot_vs_alg'):
     return matrix
 
 
-def build_cross_hint_matrix(df, classifier='rfm', probe='mot_vs_alg'):
+def build_cross_hint_matrix(df, classifier='rfm', probe='mot_vs_alg', step=None):
     """Build a (train_bias x eval_bias) AUC matrix, averaged across models and datasets."""
     # Standard results (diagonal)
     standard = df[df['tag'] == ''].copy()
-    standard_best = get_best_auc(standard, ['model', 'dataset', 'bias'], classifier, probe)
+    standard_auc = get_last_layer_auc(standard, ['model', 'dataset', 'bias'], classifier, probe, step)
 
     # Cross-hint results
     cross = df[df['tag'].str.contains('eval_bias=', na=False) &
@@ -135,27 +142,72 @@ def build_cross_hint_matrix(df, classifier='rfm', probe='mot_vs_alg'):
     cross['eval_bias'] = cross['tag'].apply(
         lambda t: parse_cross_tag(t).get('eval_bias', ''))
     cross = cross[cross['eval_bias'] != '']
-    cross_best = get_best_auc(cross, ['model', 'dataset', 'bias', 'eval_bias'], classifier, probe)
-    cross_best = cross_best.rename(columns={'bias': 'train_bias'})
+    cross_auc = get_last_layer_auc(cross, ['model', 'dataset', 'bias', 'eval_bias'], classifier, probe, step)
+    cross_auc = cross_auc.rename(columns={'bias': 'train_bias'})
 
     matrix = np.full((len(BIAS_ORDER), len(BIAS_ORDER)), np.nan)
     for i, train_b in enumerate(BIAS_ORDER):
         # Diagonal
-        diag_rows = standard_best[standard_best['bias'] == train_b]
+        diag_rows = standard_auc[standard_auc['bias'] == train_b]
         if len(diag_rows) > 0:
             matrix[i, i] = diag_rows['auc'].mean()
         # Off-diagonal
         for j, eval_b in enumerate(BIAS_ORDER):
             if i == j:
                 continue
-            cross_rows = cross_best[
-                (cross_best['train_bias'] == train_b) &
-                (cross_best['eval_bias'] == eval_b)
+            cross_rows = cross_auc[
+                (cross_auc['train_bias'] == train_b) &
+                (cross_auc['eval_bias'] == eval_b)
             ]
             if len(cross_rows) > 0:
                 matrix[i, j] = cross_rows['auc'].mean()
 
     return matrix
+
+
+def build_cross_model_matrix(df, classifier='rfm', probe='mot_vs_alg', step=None):
+    """Build a (train_model x eval_model) AUC matrix, averaged across datasets and biases.
+
+    Only includes models that have cross-model results (same hidden dimension).
+    """
+    # Standard results (diagonal)
+    standard = df[df['tag'] == ''].copy()
+    standard_auc = get_last_layer_auc(standard, ['model', 'dataset', 'bias'], classifier, probe, step)
+
+    # Cross-model results
+    cross = df[df['tag'].str.contains('eval_model=', na=False) &
+               ~df['tag'].str.contains('permuted', na=False)].copy()
+    cross['eval_model'] = cross['tag'].apply(
+        lambda t: parse_cross_tag(t).get('eval_model', ''))
+    cross = cross[cross['eval_model'] != '']
+    cross_auc = get_last_layer_auc(cross, ['model', 'dataset', 'bias', 'eval_model'], classifier, probe, step)
+    cross_auc = cross_auc.rename(columns={'model': 'train_model'})
+
+    # Determine which models have cross-model data
+    models_with_data = sorted(set(cross_auc['train_model'].unique()) | set(cross_auc['eval_model'].unique()))
+    if not models_with_data:
+        return None, []
+    # Keep only models in MODEL_ORDER that have data
+    model_order = [m for m in MODEL_ORDER if m in models_with_data]
+
+    matrix = np.full((len(model_order), len(model_order)), np.nan)
+    for i, train_m in enumerate(model_order):
+        # Diagonal
+        diag_rows = standard_auc[standard_auc['model'] == train_m]
+        if len(diag_rows) > 0:
+            matrix[i, i] = diag_rows['auc'].mean()
+        # Off-diagonal
+        for j, eval_m in enumerate(model_order):
+            if i == j:
+                continue
+            cross_rows = cross_auc[
+                (cross_auc['train_model'] == train_m) &
+                (cross_auc['eval_model'] == eval_m)
+            ]
+            if len(cross_rows) > 0:
+                matrix[i, j] = cross_rows['auc'].mean()
+
+    return matrix, model_order
 
 
 def plot_heatmap(matrix, labels, title, filename, label_map=None):
@@ -188,24 +240,24 @@ def plot_heatmap(matrix, labels, title, filename, label_map=None):
     plt.close()
 
 
-def plot_permutation_comparison(df, classifier='rfm', probe='mot_vs_alg'):
+def plot_permutation_comparison(df, classifier='rfm', probe='mot_vs_alg', step=None):
     """Bar chart: real vs permuted AUC."""
     # Permuted results
     perm = df[df['tag'].str.contains('permuted_eval', na=False)].copy()
-    perm_best = get_best_auc(perm, ['model', 'dataset', 'bias'], classifier, probe)
+    perm_auc = get_last_layer_auc(perm, ['model', 'dataset', 'bias'], classifier, probe, step)
 
     # Standard results
     standard = df[df['tag'] == ''].copy()
-    std_best = get_best_auc(standard, ['model', 'dataset', 'bias'], classifier, probe)
+    std_auc = get_last_layer_auc(standard, ['model', 'dataset', 'bias'], classifier, probe, step)
 
-    if len(perm_best) == 0:
+    if len(perm_auc) == 0:
         print("No permutation results found, skipping plot.")
         return
 
-    real_mean = std_best['auc'].mean()
-    real_std = std_best['auc'].std()
-    perm_mean = perm_best['auc'].mean()
-    perm_std = perm_best['auc'].std()
+    real_mean = std_auc['auc'].mean()
+    real_std = std_auc['auc'].std()
+    perm_mean = perm_auc['auc'].mean()
+    perm_std = perm_auc['auc'].std()
 
     fig, ax = plt.subplots(figsize=(4, 5))
     bars = ax.bar(['Real Labels', 'Permuted Labels'], [real_mean, perm_mean],
@@ -245,28 +297,47 @@ def main():
         print(f"  {t}")
 
     # Cross-dataset transfer matrix
-    print("\n=== Cross-dataset transfer ===")
-    xd_matrix = build_cross_dataset_matrix(df, args.classifier, args.probe)
-    print(pd.DataFrame(xd_matrix,
-        index=[DATASET_LABELS[d] for d in DATASET_ORDER],
-        columns=[DATASET_LABELS[d] for d in DATASET_ORDER]).to_string())
-    plot_heatmap(xd_matrix, DATASET_ORDER,
-                 'Cross-Dataset Transfer (AUC)', 'cross_dataset_transfer.png',
-                 DATASET_LABELS)
+    for step, step_label in [(0, 'pre_generation'), (2, 'post_generation')]:
+        print(f"\n=== Cross-dataset transfer ({step_label}, step {step}) ===")
+        xd_matrix = build_cross_dataset_matrix(df, args.classifier, args.probe, step=step)
+        print(pd.DataFrame(xd_matrix,
+            index=[DATASET_LABELS[d] for d in DATASET_ORDER],
+            columns=[DATASET_LABELS[d] for d in DATASET_ORDER]).to_string())
+        plot_heatmap(xd_matrix, DATASET_ORDER,
+                     f'Cross-Dataset Transfer ({step_label.replace("_", "-")})',
+                     f'cross_dataset_transfer_{step_label}.png',
+                     DATASET_LABELS)
 
     # Cross-hint transfer matrix
-    print("\n=== Cross-hint transfer ===")
-    xb_matrix = build_cross_hint_matrix(df, args.classifier, args.probe)
-    print(pd.DataFrame(xb_matrix,
-        index=[BIAS_LABELS[b] for b in BIAS_ORDER],
-        columns=[BIAS_LABELS[b] for b in BIAS_ORDER]).to_string())
-    plot_heatmap(xb_matrix, BIAS_ORDER,
-                 'Cross-Hint Transfer (AUC)', 'cross_hint_transfer.png',
-                 BIAS_LABELS)
+    for step, step_label in [(0, 'pre_generation'), (2, 'post_generation')]:
+        print(f"\n=== Cross-hint transfer ({step_label}, step {step}) ===")
+        xb_matrix = build_cross_hint_matrix(df, args.classifier, args.probe, step=step)
+        print(pd.DataFrame(xb_matrix,
+            index=[BIAS_LABELS[b] for b in BIAS_ORDER],
+            columns=[BIAS_LABELS[b] for b in BIAS_ORDER]).to_string())
+        plot_heatmap(xb_matrix, BIAS_ORDER,
+                     f'Cross-Hint Transfer ({step_label.replace("_", "-")})',
+                     f'cross_hint_transfer_{step_label}.png',
+                     BIAS_LABELS)
 
     # Permutation baseline
     print("\n=== Permutation baseline ===")
-    plot_permutation_comparison(df, args.classifier, args.probe)
+    plot_permutation_comparison(df, args.classifier, args.probe, step=2)
+
+    # Cross-model transfer matrix
+    for step, step_label in [(0, 'pre_generation'), (2, 'post_generation')]:
+        print(f"\n=== Cross-model transfer ({step_label}, step {step}) ===")
+        xm_matrix, xm_models = build_cross_model_matrix(df, args.classifier, args.probe, step=step)
+        if xm_matrix is not None and len(xm_models) > 0:
+            print(pd.DataFrame(xm_matrix,
+                index=[MODEL_LABELS.get(m, m) for m in xm_models],
+                columns=[MODEL_LABELS.get(m, m) for m in xm_models]).to_string())
+            plot_heatmap(xm_matrix, xm_models,
+                         f'Cross-Model Transfer ({step_label.replace("_", "-")})',
+                         f'cross_model_transfer_{step_label}.png',
+                         MODEL_LABELS)
+        else:
+            print("  No cross-model results found.")
 
 
 if __name__ == '__main__':
