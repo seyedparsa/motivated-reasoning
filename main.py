@@ -46,6 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--eval_bias", type=str, default=None, help="Hint type to evaluate on (defaults to --bias)")
     parser.add_argument("--eval_probe", type=str, default=None, help="Probe task for eval data (defaults to --probe)")
     parser.add_argument("--eval_model", type=str, default=None, help="Model to evaluate on (defaults to --model)")
+    parser.add_argument("--permute_eval_labels", action='store_true', help="Shuffle eval labels (permutation baseline)")
     # parser.add_argument("--n_test", type=int,  help="Number of responses to test on")    
     args = parser.parse_args()
 
@@ -125,6 +126,7 @@ if __name__ == "__main__":
             n_ckpts=args.n_ckpts, ckpt=args.ckpt, universal_probe=args.universal, balanced=args.balanced,
             filter_mentions=args.filter_mentions, batch_size=args.bs_probe,
             aggregate_layers=args.aggregate_layers, aggregate_steps=args.aggregate_steps, tag=args.tag,
+            permute_eval_labels=args.permute_eval_labels,
         )
     if args.evaluate_llm:
         if args.llm is None:

@@ -2022,6 +2022,7 @@ def evaluate_probes(
     eval_model, eval_dataset, eval_split, eval_offset, eval_n_test_questions, eval_bias, eval_probe,
     n_ckpts, ckpt='rel', universal_probe=True, balanced=True, filter_mentions=True,
     batch_size=64, shuffle_seed=42, aggregate_layers=None, aggregate_steps=None, tag='',
+    permute_eval_labels=False,
 ):
     # Build effective tag: DB columns represent the train side,
     # tag records eval-side differences.
@@ -2036,6 +2037,8 @@ def evaluate_probes(
         cross_parts.append(f"eval_bias={eval_bias}")
     if eval_probe != train_probe:
         cross_parts.append(f"eval_probe={eval_probe}")
+    if permute_eval_labels:
+        cross_parts.append("permuted_eval")
     effective_tag = '_'.join(filter(None, [tag] + cross_parts))
 
     log_stage(f"evaluate_probes: {eval_model}/{eval_dataset}/{eval_bias}/{eval_probe}")
@@ -2059,6 +2062,11 @@ def evaluate_probes(
         shuffle_seed=shuffle_seed,
         tag=tag,
     )
+
+    if permute_eval_labels:
+        rng = np.random.default_rng(shuffle_seed + 9999)
+        labels = list(rng.permutation(labels))
+        log_stage(f"Permuted eval labels. Distribution: {np.bincount(labels).tolist()}")
 
     log_stage("Extracting hidden states")
     hidden_states = get_hidden_states(
