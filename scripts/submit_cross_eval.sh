@@ -94,15 +94,16 @@ if [[ "${MODE}" == "all" || "${MODE}" == "cross_hint" ]]; then
     done
 fi
 
-# Permutation baselines: a few representative configs
+# Permutation baselines: all configs
 if [[ "${MODE}" == "all" || "${MODE}" == "permuted" ]]; then
     echo "=== Permutation baselines ==="
     for model in "${MODELS[@]}"; do
-        for bias in "${BIASES[@]}"; do
-            # Standard (train=eval) with permuted labels
-            job_name="perm__${model}__mmlu__${bias}"
-            cmd="python main.py --model ${model} --dataset mmlu --bias ${bias} --probe ${PROBE} --evaluate_probes --n_ckpts ${N_CKPTS} --ckpt ${CKPT} --scale ${SCALE} --permute_eval_labels"
-            submit_job "${job_name}" "${cmd}"
+        for dataset in "${DATASETS[@]}"; do
+            for bias in "${BIASES[@]}"; do
+                job_name="perm__${model}__${dataset}__${bias}"
+                cmd="python main.py --model ${model} --dataset ${dataset} --bias ${bias} --probe ${PROBE} --evaluate_probes --n_ckpts ${N_CKPTS} --ckpt ${CKPT} --scale ${SCALE} --permute_eval_labels"
+                submit_job "${job_name}" "${cmd}"
+            done
         done
     done
 fi
