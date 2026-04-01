@@ -215,7 +215,7 @@ def plot_heatmap(matrix, labels, title, filename, label_map=None):
     fig, ax = plt.subplots(figsize=(6, 5))
     display_labels = [label_map.get(l, l) if label_map else l for l in labels]
 
-    im = ax.imshow(matrix, cmap='RdYlGn', vmin=0.5, vmax=1.0, aspect='equal', origin='lower')
+    im = ax.imshow(matrix, cmap='YlGn', vmin=0.5, vmax=1.0, aspect='equal', origin='lower')
     ax.set_xticks(range(len(labels)))
     ax.set_yticks(range(len(labels)))
     ax.set_xticklabels(display_labels, rotation=45, ha='right')
@@ -229,13 +229,14 @@ def plot_heatmap(matrix, labels, title, filename, label_map=None):
         for j in range(matrix.shape[1]):
             val = matrix[i, j]
             if not np.isnan(val):
-                color = 'white' if val < 0.65 else 'black'
+                color = 'black'
                 ax.text(j, i, f'{val:.2f}', ha='center', va='center', color=color, fontsize=12)
 
     plt.colorbar(im, ax=ax, label='AUC', shrink=0.8)
     plt.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES_DIR / filename, dpi=150, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / filename.replace('.png', '.pdf'), bbox_inches='tight')
     print(f"Saved {FIGURES_DIR / filename}")
     plt.close()
 
@@ -281,6 +282,7 @@ def plot_permutation_comparison(df, classifier='rfm', probe='mot_vs_alg', step=N
     ax.legend()
     plt.tight_layout()
     fig.savefig(FIGURES_DIR / 'permutation_by_model.png', dpi=150, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / 'permutation_by_model.pdf', bbox_inches='tight')
     print(f"Saved {FIGURES_DIR / 'permutation_by_model.png'}")
     plt.close()
 
@@ -303,6 +305,7 @@ def plot_permutation_comparison(df, classifier='rfm', probe='mot_vs_alg', step=N
     ax.legend()
     plt.tight_layout()
     fig.savefig(FIGURES_DIR / 'permutation_by_dataset.png', dpi=150, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / 'permutation_by_dataset.pdf', bbox_inches='tight')
     print(f"Saved {FIGURES_DIR / 'permutation_by_dataset.png'}")
     plt.close()
 
@@ -325,27 +328,8 @@ def plot_permutation_comparison(df, classifier='rfm', probe='mot_vs_alg', step=N
     ax.legend()
     plt.tight_layout()
     fig.savefig(FIGURES_DIR / 'permutation_by_hint.png', dpi=150, bbox_inches='tight')
+    fig.savefig(FIGURES_DIR / 'permutation_by_hint.pdf', bbox_inches='tight')
     print(f"Saved {FIGURES_DIR / 'permutation_by_hint.png'}")
-    plt.close()
-
-    # --- Plot 4: Paired scatter (each config is a dot) ---
-    fig, ax = plt.subplots(figsize=(6, 6))
-    for model in models:
-        subset = merged[merged['model'] == model]
-        ax.scatter(subset['real_auc'], subset['perm_auc'],
-                   label=MODEL_LABELS.get(model, model), s=50, alpha=0.7)
-    ax.plot([0.4, 1.0], [0.5, 0.5], 'k--', alpha=0.3, label='Chance')
-    ax.plot([0.4, 1.0], [0.4, 1.0], 'gray', alpha=0.2)
-    ax.set_xlabel('Real Labels AUC')
-    ax.set_ylabel('Permuted Labels AUC')
-    ax.set_title('Real vs Permuted AUC')
-    ax.set_xlim(0.4, 1.05)
-    ax.set_ylim(0.3, 0.8)
-    ax.legend()
-    plt.tight_layout()
-    fig.savefig(FIGURES_DIR / 'permutation_scatter.png', dpi=150, bbox_inches='tight')
-    print(f"Saved {FIGURES_DIR / 'permutation_scatter.png'}")
-    plt.close()
     plt.close()
 
 
@@ -366,27 +350,27 @@ def main():
         print(f"  {t}")
 
     # Cross-dataset transfer matrix
-    for step, step_label in [(0, 'pre_generation'), (2, 'post_generation')]:
+    for step, step_label in [(0, 'Pre-Generation'), (2, 'Post-Generation')]:
         print(f"\n=== Cross-dataset transfer ({step_label}, step {step}) ===")
         xd_matrix = build_cross_dataset_matrix(df, args.classifier, args.probe, step=step)
         print(pd.DataFrame(xd_matrix,
             index=[DATASET_LABELS[d] for d in DATASET_ORDER],
             columns=[DATASET_LABELS[d] for d in DATASET_ORDER]).to_string())
         plot_heatmap(xd_matrix, DATASET_ORDER,
-                     f'Cross-Dataset Transfer ({step_label.replace("_", "-")})',
-                     f'cross_dataset_transfer_{step_label}.png',
+                     f'Cross-Dataset Transfer ({step_label})',
+                     f'cross_dataset_transfer_{step_label.lower().replace("-", "_")}.png',
                      DATASET_LABELS)
 
     # Cross-hint transfer matrix
-    for step, step_label in [(0, 'pre_generation'), (2, 'post_generation')]:
+    for step, step_label in [(0, 'Pre-Generation'), (2, 'Post-Generation')]:
         print(f"\n=== Cross-hint transfer ({step_label}, step {step}) ===")
         xb_matrix = build_cross_hint_matrix(df, args.classifier, args.probe, step=step)
         print(pd.DataFrame(xb_matrix,
             index=[BIAS_LABELS[b] for b in BIAS_ORDER],
             columns=[BIAS_LABELS[b] for b in BIAS_ORDER]).to_string())
         plot_heatmap(xb_matrix, BIAS_ORDER,
-                     f'Cross-Hint Transfer ({step_label.replace("_", "-")})',
-                     f'cross_hint_transfer_{step_label}.png',
+                     f'Cross-Hint Transfer ({step_label})',
+                     f'cross_hint_transfer_{step_label.lower().replace("-", "_")}.png',
                      BIAS_LABELS)
 
     # Permutation baseline
@@ -394,7 +378,7 @@ def main():
     plot_permutation_comparison(df, args.classifier, args.probe, step=2)
 
     # Cross-model transfer matrix
-    for step, step_label in [(0, 'pre_generation'), (2, 'post_generation')]:
+    for step, step_label in [(0, 'Pre-Generation'), (2, 'Post-Generation')]:
         print(f"\n=== Cross-model transfer ({step_label}, step {step}) ===")
         xm_matrix, xm_models = build_cross_model_matrix(df, args.classifier, args.probe, step=step)
         if xm_matrix is not None and len(xm_models) > 0:
@@ -402,8 +386,8 @@ def main():
                 index=[MODEL_LABELS.get(m, m) for m in xm_models],
                 columns=[MODEL_LABELS.get(m, m) for m in xm_models]).to_string())
             plot_heatmap(xm_matrix, xm_models,
-                         f'Cross-Model Transfer ({step_label.replace("_", "-")})',
-                         f'cross_model_transfer_{step_label}.png',
+                         f'Cross-Model Transfer ({step_label})',
+                         f'cross_model_transfer_{step_label.lower().replace("-", "_")}.png',
                          MODEL_LABELS)
         else:
             print("  No cross-model results found.")
