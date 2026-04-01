@@ -215,7 +215,7 @@ def plot_heatmap(matrix, labels, title, filename, label_map=None):
     fig, ax = plt.subplots(figsize=(6, 5))
     display_labels = [label_map.get(l, l) if label_map else l for l in labels]
 
-    im = ax.imshow(matrix, cmap='RdYlGn', vmin=0.5, vmax=1.0, aspect='equal')
+    im = ax.imshow(matrix, cmap='RdYlGn', vmin=0.5, vmax=1.0, aspect='equal', origin='lower')
     ax.set_xticks(range(len(labels)))
     ax.set_yticks(range(len(labels)))
     ax.set_xticklabels(display_labels, rotation=45, ha='right')
@@ -241,42 +241,111 @@ def plot_heatmap(matrix, labels, title, filename, label_map=None):
 
 
 def plot_permutation_comparison(df, classifier='rfm', probe='mot_vs_alg', step=None):
-    """Bar chart: real vs permuted AUC."""
+    """Multiple permutation baseline plots: overall, by model, by dataset, by hint type, and paired scatter."""
     # Permuted results
     perm = df[df['tag'].str.contains('permuted_eval', na=False)].copy()
     perm_auc = get_last_layer_auc(perm, ['model', 'dataset', 'bias'], classifier, probe, step)
+    perm_auc = perm_auc.rename(columns={'auc': 'perm_auc'})
 
     # Standard results
     standard = df[df['tag'] == ''].copy()
     std_auc = get_last_layer_auc(standard, ['model', 'dataset', 'bias'], classifier, probe, step)
+    std_auc = std_auc.rename(columns={'auc': 'real_auc'})
 
     if len(perm_auc) == 0:
-        print("No permutation results found, skipping plot.")
+        print("No permutation results found, skipping plots.")
         return
 
-    real_mean = std_auc['auc'].mean()
-    real_std = std_auc['auc'].std()
-    perm_mean = perm_auc['auc'].mean()
-    perm_std = perm_auc['auc'].std()
+    # Merge real and permuted
+    merged = std_auc.merge(perm_auc, on=['model', 'dataset', 'bias'], how='inner')
 
-    fig, ax = plt.subplots(figsize=(4, 5))
-    bars = ax.bar(['Real Labels', 'Permuted Labels'], [real_mean, perm_mean],
-                  yerr=[real_std, perm_std], capsize=5,
-                  color=['#2ca02c', '#d62728'], alpha=0.8)
-    ax.set_ylabel('AUC')
-    ax.set_title('Permutation Baseline')
-    ax.set_ylim(0.4, 1.05)
-    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, label='Chance')
-    ax.legend()
-
-    for bar, val in zip(bars, [real_mean, perm_mean]):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
-                f'{val:.2f}', ha='center', fontsize=12)
-
-    plt.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / 'permutation_baseline.png', dpi=150, bbox_inches='tight')
-    print(f"Saved {FIGURES_DIR / 'permutation_baseline.png'}")
+
+    # --- Plot 1: Grouped bars by model ---
+    fig, ax = plt.subplots(figsize=(7, 5))
+    models = [m for m in MODEL_ORDER if m in merged['model'].unique()]
+    x = np.arange(len(models))
+    width = 0.35
+    real_vals = [merged[merged['model'] == m]['real_auc'].mean() for m in models]
+    perm_vals = [merged[merged['model'] == m]['perm_auc'].mean() for m in models]
+    real_errs = [merged[merged['model'] == m]['real_auc'].std() for m in models]
+    perm_errs = [merged[merged['model'] == m]['perm_auc'].std() for m in models]
+    ax.bar(x - width/2, real_vals, width, yerr=real_errs, capsize=4, label='Real', color='#2ca02c', alpha=0.8)
+    ax.bar(x + width/2, perm_vals, width, yerr=perm_errs, capsize=4, label='Permuted', color='#d62728', alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([MODEL_LABELS.get(m, m) for m in models])
+    ax.set_ylabel('AUC')
+    ax.set_title('Permutation Baseline by Model')
+    ax.set_ylim(0.3, 1.05)
+    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(FIGURES_DIR / 'permutation_by_model.png', dpi=150, bbox_inches='tight')
+    print(f"Saved {FIGURES_DIR / 'permutation_by_model.png'}")
+    plt.close()
+
+    # --- Plot 2: Grouped bars by dataset ---
+    fig, ax = plt.subplots(figsize=(7, 5))
+    datasets = [d for d in DATASET_ORDER if d in merged['dataset'].unique()]
+    x = np.arange(len(datasets))
+    real_vals = [merged[merged['dataset'] == d]['real_auc'].mean() for d in datasets]
+    perm_vals = [merged[merged['dataset'] == d]['perm_auc'].mean() for d in datasets]
+    real_errs = [merged[merged['dataset'] == d]['real_auc'].std() for d in datasets]
+    perm_errs = [merged[merged['dataset'] == d]['perm_auc'].std() for d in datasets]
+    ax.bar(x - width/2, real_vals, width, yerr=real_errs, capsize=4, label='Real', color='#2ca02c', alpha=0.8)
+    ax.bar(x + width/2, perm_vals, width, yerr=perm_errs, capsize=4, label='Permuted', color='#d62728', alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([DATASET_LABELS.get(d, d) for d in datasets])
+    ax.set_ylabel('AUC')
+    ax.set_title('Permutation Baseline by Dataset')
+    ax.set_ylim(0.3, 1.05)
+    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(FIGURES_DIR / 'permutation_by_dataset.png', dpi=150, bbox_inches='tight')
+    print(f"Saved {FIGURES_DIR / 'permutation_by_dataset.png'}")
+    plt.close()
+
+    # --- Plot 3: Grouped bars by hint type ---
+    fig, ax = plt.subplots(figsize=(7, 5))
+    biases = [b for b in BIAS_ORDER if b in merged['bias'].unique()]
+    x = np.arange(len(biases))
+    real_vals = [merged[merged['bias'] == b]['real_auc'].mean() for b in biases]
+    perm_vals = [merged[merged['bias'] == b]['perm_auc'].mean() for b in biases]
+    real_errs = [merged[merged['bias'] == b]['real_auc'].std() for b in biases]
+    perm_errs = [merged[merged['bias'] == b]['perm_auc'].std() for b in biases]
+    ax.bar(x - width/2, real_vals, width, yerr=real_errs, capsize=4, label='Real', color='#2ca02c', alpha=0.8)
+    ax.bar(x + width/2, perm_vals, width, yerr=perm_errs, capsize=4, label='Permuted', color='#d62728', alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([BIAS_LABELS.get(b, b) for b in biases])
+    ax.set_ylabel('AUC')
+    ax.set_title('Permutation Baseline by Hint Type')
+    ax.set_ylim(0.3, 1.05)
+    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(FIGURES_DIR / 'permutation_by_hint.png', dpi=150, bbox_inches='tight')
+    print(f"Saved {FIGURES_DIR / 'permutation_by_hint.png'}")
+    plt.close()
+
+    # --- Plot 4: Paired scatter (each config is a dot) ---
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for model in models:
+        subset = merged[merged['model'] == model]
+        ax.scatter(subset['real_auc'], subset['perm_auc'],
+                   label=MODEL_LABELS.get(model, model), s=50, alpha=0.7)
+    ax.plot([0.4, 1.0], [0.5, 0.5], 'k--', alpha=0.3, label='Chance')
+    ax.plot([0.4, 1.0], [0.4, 1.0], 'gray', alpha=0.2)
+    ax.set_xlabel('Real Labels AUC')
+    ax.set_ylabel('Permuted Labels AUC')
+    ax.set_title('Real vs Permuted AUC')
+    ax.set_xlim(0.4, 1.05)
+    ax.set_ylim(0.3, 0.8)
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(FIGURES_DIR / 'permutation_scatter.png', dpi=150, bbox_inches='tight')
+    print(f"Saved {FIGURES_DIR / 'permutation_scatter.png'}")
+    plt.close()
     plt.close()
 
 
