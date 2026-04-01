@@ -107,5 +107,22 @@ if [[ "${MODE}" == "all" || "${MODE}" == "permuted" ]]; then
     done
 fi
 
+# Cross-model transfer: train on model A, eval on model B (same dataset, same bias)
+if [[ "${MODE}" == "all" || "${MODE}" == "cross_model" ]]; then
+    echo "=== Cross-model transfer ==="
+    for train_model in "${MODELS[@]}"; do
+        for eval_model in "${MODELS[@]}"; do
+            [[ "${train_model}" == "${eval_model}" ]] && continue
+            for dataset in "${DATASETS[@]}"; do
+                for bias in "${BIASES[@]}"; do
+                    job_name="xm__${train_model}__${eval_model}__${dataset}__${bias}"
+                    cmd="python main.py --model ${train_model} --dataset ${dataset} --bias ${bias} --probe ${PROBE} --evaluate_probes --eval_model ${eval_model} --n_ckpts ${N_CKPTS} --ckpt ${CKPT} --scale ${SCALE}"
+                    submit_job "${job_name}" "${cmd}"
+                done
+            done
+        done
+    done
+fi
+
 echo ""
 echo "Submitted ${job_count} job(s)"
