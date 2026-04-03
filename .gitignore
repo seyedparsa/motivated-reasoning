@@ -6,8 +6,6 @@ directions/*
 hidden_states/*
 figures/bias_detection/
 figures/layer_evolution/
-figures/probe_vs_gpt-5-nano/
-figures/rfm_vs_linear/
 figures/taxonomy/
 */*.out
 */v1
@@ -25,7 +23,6 @@ extension/
 outputs/
 old_outputs/
 examples*.csv
-examples/
 
 # Job output files
 *.err
