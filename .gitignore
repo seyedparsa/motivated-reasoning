@@ -38,6 +38,10 @@ simons_local.yml
 
 # Editor and IDE
 .vscode/
+.claude/
+
+# macOS
+.DS_Store
 
 # Core dumps
 core.*
