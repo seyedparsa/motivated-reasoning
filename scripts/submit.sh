@@ -28,6 +28,7 @@ BIAS=${BIAS:-all}
 PROBE=${PROBE:-all}
 LLM=${LLM:-gpt-5-nano}
 HINT_IDX=${HINT_IDX:-0}
+HINT_IDX_ALL=${HINT_IDX_ALL:-0}
 TAG=${TAG:-}
 
 # Scale and checkpointing
@@ -112,6 +113,16 @@ needs_probe() {
     [[ "${EVALUATE_LLM}" == "1" ]]
 }
 
+# Map dataset -> number of choices (mirrors get_choices in core/utils.py)
+n_choices_for() {
+    case "$1" in
+        mmlu|arc-challenge) echo 4 ;;
+        aqua|commonsense_qa) echo 5 ;;
+        bbh-causal_judgement|bbh-formal_fallacies) echo 2 ;;
+        *) echo "" ;;
+    esac
+}
+
 # Submit jobs
 job_count=0
 first_job_id=""
@@ -133,21 +144,37 @@ for model in "${MODEL_ARR[@]}"; do
             fi
 
             for probe in "${probe_list[@]}"; do
-                # Build job name (use __ as delimiter to avoid splitting issues with commonsense_qa)
-                job_name="job__${model}__${dataset}"
-                [[ "${bias}" != "none" ]] && job_name="${job_name}__${bias}"
-                [[ "${probe}" != "none" ]] && job_name="${job_name}__${probe}"
+                # Determine hint_idx iteration: only fan out when generating with a real bias
+                # and HINT_IDX_ALL=1; otherwise use the single HINT_IDX value.
+                if [[ "${HINT_IDX_ALL}" == "1" && "${GENERATE}" == "1" && "${bias}" != "none" ]]; then
+                    n_choices=$(n_choices_for "${dataset}")
+                    if [[ -z "${n_choices}" ]]; then
+                        echo "Error: HINT_IDX_ALL=1 but unknown dataset '${dataset}'"
+                        exit 1
+                    fi
+                    hint_idx_list=()
+                    for ((h=0; h<n_choices; h++)); do hint_idx_list+=("$h"); done
+                else
+                    hint_idx_list=("${HINT_IDX}")
+                fi
 
-                # Build bias/probe flags for this job
-                job_flags="${ACTION_FLAGS}"
-                [[ "${bias}" != "none" ]] && job_flags="${job_flags:+$job_flags }--bias ${bias}"
-                [[ "${probe}" != "none" ]] && job_flags="${job_flags:+$job_flags }--probe ${probe}"
+                for hint_idx in "${hint_idx_list[@]}"; do
+                    # Build job name (use __ as delimiter to avoid splitting issues with commonsense_qa)
+                    job_name="job__${model}__${dataset}"
+                    [[ "${bias}" != "none" ]] && job_name="${job_name}__${bias}"
+                    [[ "${probe}" != "none" ]] && job_name="${job_name}__${probe}"
+                    [[ "${HINT_IDX_ALL}" == "1" && "${bias}" != "none" ]] && job_name="${job_name}__h${hint_idx}"
 
-                echo "Submitting: ${job_name}"
-                echo "  Model: ${model}, Dataset: ${dataset}, Bias: ${bias}, Probe: ${probe}"
-                echo "  Actions:${ACTION_FLAGS}"
+                    # Build bias/probe flags for this job
+                    job_flags="${ACTION_FLAGS}"
+                    [[ "${bias}" != "none" ]] && job_flags="${job_flags:+$job_flags }--bias ${bias}"
+                    [[ "${probe}" != "none" ]] && job_flags="${job_flags:+$job_flags }--probe ${probe}"
 
-                job_id=$(sbatch --export=ALL --parsable${EXCLUDE:+ --exclude=${EXCLUDE}} <<EOF
+                    echo "Submitting: ${job_name}"
+                    echo "  Model: ${model}, Dataset: ${dataset}, Bias: ${bias}, Probe: ${probe}, Hint_idx: ${hint_idx}"
+                    echo "  Actions:${ACTION_FLAGS}"
+
+                    job_id=$(sbatch --export=ALL --parsable${EXCLUDE:+ --exclude=${EXCLUDE}} <<EOF
 #!/bin/bash
 #SBATCH --account=${ACCOUNT}
 #SBATCH --partition=${PARTITION}
@@ -178,19 +205,20 @@ export HF_USE_SOFTFILELOCK=1
 export PYTHONUNBUFFERED=1
 
 echo "=== Job: ${job_name} ==="
-echo "Model: ${model} | Dataset: ${dataset} | Bias: ${bias} | Probe: ${probe}"
+echo "Model: ${model} | Dataset: ${dataset} | Bias: ${bias} | Probe: ${probe} | Hint_idx: ${hint_idx}"
 echo "Actions:${ACTION_FLAGS}"
 echo "Git commit: \$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo ""
 
-python main.py --model "${model}" --dataset "${dataset}" --scale ${SCALE} --n_ckpts ${N_CKPTS} --ckpt ${CKPT} --hint_idx ${HINT_IDX} --llm ${LLM} --filter_mentions ${FILTER_MENTIONS_VAL} ${job_flags}${OPTIONAL_FLAGS:+ ${OPTIONAL_FLAGS}}
+python main.py --model "${model}" --dataset "${dataset}" --scale ${SCALE} --n_ckpts ${N_CKPTS} --ckpt ${CKPT} --hint_idx ${hint_idx} --llm ${LLM} --filter_mentions ${FILTER_MENTIONS_VAL} ${job_flags}${OPTIONAL_FLAGS:+ ${OPTIONAL_FLAGS}}
 
 echo "Done!"
 EOF
 )
-                echo "Submitted batch job ${job_id}"
-                [ -z "$first_job_id" ] && first_job_id="$job_id"
-                job_count=$((job_count + 1))
+                    echo "Submitted batch job ${job_id}"
+                    [ -z "$first_job_id" ] && first_job_id="$job_id"
+                    job_count=$((job_count + 1))
+                done
             done
         done
     done
