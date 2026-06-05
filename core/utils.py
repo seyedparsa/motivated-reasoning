@@ -20,8 +20,22 @@ def get_tokenizer(model_name):
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
     return tokenizer
+
+
+DEFAULT_SAMPLING = {
+    "do_sample": True,
+    "temperature": 0.1,
+    "repetition_penalty": 1.15,
+    "no_repeat_ngram_size": 3,
+}
+
+
+def get_sampling_config(model_name):
+    with open("core/configs/models.json", "r") as f:
+        config = json.load(f)
+    return config[model_name].get("sampling", DEFAULT_SAMPLING)
 
 
 def get_model(model_name, device="auto"):

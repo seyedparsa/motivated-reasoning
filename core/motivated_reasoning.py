@@ -18,7 +18,7 @@ import csv
 import pandas as pd
 
 from torch.utils.data import DataLoader, TensorDataset
-from core.utils import get_choices, get_dataset, get_model, get_tokenizer
+from core.utils import get_choices, get_dataset, get_model, get_tokenizer, get_sampling_config
 from core.results_db import upsert_rows, upsert_llm_rows
 from datasets import load_from_disk, load_dataset, Dataset
 from huggingface_hub import HfApi
@@ -395,7 +395,6 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
 def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_questions, batch_size=64, tag=''):
     log_stage(f"generate_responses: {model_name}/{dataset_name}/{bias or 'unbiased'}")
     log_stage("Loading model")
-    # TODO: set the appropriate temperature for each model
 
     model, tokenizer = get_model(model_name)
     if tokenizer.pad_token_id is None:
@@ -407,6 +406,8 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
     #         MultipleChoiceStoppingCriteria(tokenizer, dataset_name, valid_choices)
     #     ])
     max_new_tokens = 2048
+    sampling = get_sampling_config(model_name)
+    print(f"Sampling config for {model_name}: {sampling}")
 
     all_outputs = []
     all_answers = []
@@ -430,12 +431,9 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
                 attention_mask=attention_mask,
                 return_dict_in_generate=True,
                 max_new_tokens=max_new_tokens,
-                do_sample=True,
                 output_hidden_states=False,
-                temperature=0.1,
-                repetition_penalty=1.15,
-                no_repeat_ngram_size=3,
                 # stopping_criteria=stopping_criteria
+                **sampling,
             )
             outputs = tokenizer.batch_decode(gens.sequences, skip_special_tokens=True)
             # generated_outputs = tokenizer.batch_decode(gens.sequences[:, input_ids.shape[1]:], skip_special_tokens=True)
