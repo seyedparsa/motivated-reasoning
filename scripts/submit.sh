@@ -190,13 +190,13 @@ for model in "${MODEL_ARR[@]}"; do
 
 set -euo pipefail
 
-# Activate conda environment (sourcing ~/.bashrc may set defaults; .env wins next)
+# Source ~/.bashrc first to set up conda; then .env (which provides CONDA_ENV
+# and overrides any HF_HOME etc. defaults from ~/.bashrc).
 source ~/.bashrc
-conda activate \${CONDA_ENV}
-
-# Load environment variables from .env (must come after ~/.bashrc so HF_HOME etc.
-# from .env override any defaults set in the user's shell profile)
 source ${SCRIPT_DIR}/../.env
+
+# Activate conda environment
+conda activate \${CONDA_ENV}
 
 # Set environment variables
 export HF_HOME
