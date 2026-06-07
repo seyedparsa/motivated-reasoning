@@ -109,7 +109,14 @@ if __name__ == "__main__":
         args.n_questions = min(args.n_questions, args.max_samples)
 
     if args.generate:
-        generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, args.n_questions, args.bs_gen, tag=args.tag)
+        # Generate enough rows for both the train pool (n_questions) and the
+        # test pool (n_test_questions). evaluate_probes loads the test slice at
+        # offset=n_questions, so we need at least n_questions + n_test_questions
+        # rows. Cap by max_samples (smoke mode) if it's smaller.
+        gen_n = args.n_questions + args.n_test_questions
+        if args.max_samples is not None:
+            gen_n = min(gen_n, args.max_samples)
+        generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, gen_n, args.bs_gen, tag=args.tag)
     if args.evaluate:
         evaluate_responses(args.model, args.dataset, split)
     if args.train_probes:
