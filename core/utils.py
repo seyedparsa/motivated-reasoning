@@ -38,6 +38,18 @@ def get_sampling_config(model_name):
     return config[model_name].get("sampling", DEFAULT_SAMPLING)
 
 
+def get_chat_template_kwargs(model_name):
+    """Returns extra kwargs to pass to tokenizer.apply_chat_template, from models.json.
+
+    Defaults to {} so the model's default template behavior applies. To disable
+    Qwen3 thinking mode, declare `"chat_template_kwargs": {"enable_thinking": false}`
+    in models.json for that entry.
+    """
+    with open("core/configs/models.json", "r") as f:
+        config = json.load(f)
+    return config[model_name].get("chat_template_kwargs", {})
+
+
 def get_model(model_name, device="auto"):
     print(f"Loading model: {model_name}")
     with open("core/configs/models.json", "r") as f:

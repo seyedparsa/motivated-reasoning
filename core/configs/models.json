@@ -2,22 +2,37 @@
     "qwen-2.5-7b": {
       "repo": "Qwen/Qwen2.5-7B-Instruct",
       "description": "Qwen 2.5 7B Instruct model"
-    },    
+    },
     "qwen-3-8b": {
       "repo": "Qwen/Qwen3-8B",
-      "description": "Qwen 3 8B model"
+      "description": "Qwen 3 8B model (paper config: non-thinking mode)",
+      "chat_template_kwargs": {"enable_thinking": false}
     },
     "qwen-3-4b": {
       "repo": "Qwen/Qwen3-4B",
-      "description": "Qwen 3 4B model"
+      "description": "Qwen 3 4B model (paper config: non-thinking mode)",
+      "chat_template_kwargs": {"enable_thinking": false}
     },
     "qwen-3-32b": {
       "repo": "Qwen/Qwen3-32B",
       "description": "Qwen 3 32B (dense), non-thinking mode",
+      "chat_template_kwargs": {"enable_thinking": false},
       "sampling": {
         "do_sample": true,
         "temperature": 0.7,
         "top_p": 0.8,
+        "top_k": 20,
+        "min_p": 0.0
+      }
+    },
+    "qwen-3-32b-thinking": {
+      "repo": "Qwen/Qwen3-32B",
+      "description": "Qwen 3 32B (dense), thinking mode (T=0.6, top_p=0.95 per Qwen recommendation)",
+      "chat_template_kwargs": {"enable_thinking": true},
+      "sampling": {
+        "do_sample": true,
+        "temperature": 0.6,
+        "top_p": 0.95,
         "top_k": 20,
         "min_p": 0.0
       }
@@ -32,7 +47,7 @@
     },
     "gemma-3-27b": {
       "repo": "google/gemma-3-27b-it",
-      "description": "Gemma 3 27B model"
+      "description": "Gemma 3 27B IT (HF default sampling)"
     },
     "gemma-3-4b": {
       "repo": "google/gemma-3-4b-it",
@@ -40,7 +55,13 @@
     },
     "gpt-oss-20b": {
       "repo": "openai/gpt-oss-20b",
-      "description": "GPT-OSS 20B model"
+      "description": "GPT-OSS 20B (harmony format, reasoning_effort=medium)",
+      "chat_template_kwargs": {"reasoning_effort": "medium"},
+      "sampling": {
+        "do_sample": true,
+        "temperature": 1.0,
+        "top_p": 1.0
+      }
     },
     "gpt-oss-120b": {
       "repo": "openai/gpt-oss-120b",

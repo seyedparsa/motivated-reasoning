@@ -307,6 +307,15 @@ def extract_answer(output, model_name, dataset_name, mode=None, options=None):
         assistant_keyword = "model\n"
     elif model_name.startswith('llama') or model_name.startswith('qwen'):
         assistant_keyword = "assistant\n"
+    elif model_name.startswith('gpt-oss'):
+        # Harmony format: after skip_special_tokens, the model's final-channel
+        # message follows "assistantfinal" (the assistant role + final channel
+        # tag concatenated). Fall back to "assistant" if not present.
+        idx = output.rfind("assistantfinal")
+        if idx != -1:
+            generated_output = output[idx + len("assistantfinal"):]
+            return select_letter_choice(generated_output)
+        assistant_keyword = "assistant"
     else:
         raise ValueError(f"Unknown model_name: {model_name}")
     assistant_index = output.rfind(assistant_keyword)
@@ -338,8 +347,20 @@ def extract_answers(outputs, model_name, dataset_name, mode: str = 'last'):
     return answer_list
 
 
-def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, tokenizer):
-    """Prepares inputs for the model by tokenizing and applying the specified wrapper."""
+def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, tokenizer, model_name=None):
+    """Prepares inputs for the model by tokenizing and applying the specified wrapper.
+
+    Per-model chat template arguments (e.g. enable_thinking for Qwen3) are read
+    from models.json via get_chat_template_kwargs(model_name) when model_name is
+    given. Passing model_name=None falls back to the legacy default of
+    enable_thinking=False (so existing call sites without model_name still match
+    the originally-paper-shipped behaviour for the three Qwen3 models).
+    """
+    if model_name is None:
+        chat_kwargs = {"enable_thinking": False}
+    else:
+        from core.utils import get_chat_template_kwargs
+        chat_kwargs = get_chat_template_kwargs(model_name)
     reason_first_instruction = f"Think step by step. Then, based on your reasoning, provide the answer in the format 'Correct choice: <letter>' where <letter> is a letter in {valid_choices}."
     # TODO: add "Don't anchor on your previous response"
     answer_first_instruction = f"Provide the answer in the format 'Correct choice: <letter>' where <letter> is a letter in {valid_choices}. Then, provide your reasoning. Conclude by giving an answer again in the same format 'Correct choice: <letter>'."
@@ -373,10 +394,10 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
 
         if reason_first:
             chat_prompt = tokenizer.apply_chat_template(
-                role_contents, 
-                tokenize=False, 
+                role_contents,
+                tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=False
+                **chat_kwargs,
             )
         else:
             role_contents.append({"role": "assistant", "content": first_answer_prefix})
@@ -385,7 +406,7 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
                 tokenize=False,
                 add_generation_prompt=False,
                 continue_final_message=True,
-                enable_thinking=False
+                **chat_kwargs,
             )
         chat_prompts.append(chat_prompt)
     return chat_prompts
@@ -421,7 +442,7 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
             batch = dataset[i:i + batch_size]  # dict of lists
             base_prompts, corrects = extract_questions(batch, dataset_name)
             batch_size = len(base_prompts)
-            prompts = prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, tokenizer)
+            prompts = prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, tokenizer, model_name=model_name)
             encoded_prompts = tokenizer(prompts, padding=True, truncation=True, return_tensors='pt')
             input_ids = encoded_prompts['input_ids'].to(model.device)
             attention_mask = encoded_prompts['attention_mask'].to(model.device)
@@ -2542,7 +2563,7 @@ def interactive_session(model_name, probe='mot_vs_oth', llm=None):
 
         # --- (c) Generate unhinted response ---
         print("\nGenerating unhinted response...\n")
-        unhinted_prompt = prepare_prompts([base_prompt], reason_first=True, bias=None, hint_idx=None, valid_choices=valid_choices, tokenizer=tokenizer)[0]
+        unhinted_prompt = prepare_prompts([base_prompt], reason_first=True, bias=None, hint_idx=None, valid_choices=valid_choices, tokenizer=tokenizer, model_name=model_name)[0]
         unhinted_output, unhinted_letter, _, _, _ = _generate(unhinted_prompt)
 
         # Determine hint indices: one aligned (same as unhinted answer), one different
@@ -2559,7 +2580,7 @@ def interactive_session(model_name, probe='mot_vs_oth', llm=None):
         hinted_runs = []
         for hint_idx, label in [(aligned_idx, "Aligned hint"), (other_idx, "Misaligned hint")]:
             print(f"\nGenerating response with {label} (hint -> {valid_choices[hint_idx]})...\n")
-            hinted_prompt = prepare_prompts([base_prompt], reason_first, bias, hint_idx, valid_choices, tokenizer)[0]
+            hinted_prompt = prepare_prompts([base_prompt], reason_first, bias, hint_idx, valid_choices, tokenizer, model_name=model_name)[0]
             text, ans_letter, inp, gen, mentions = _generate(hinted_prompt)
 
             # Transition category
