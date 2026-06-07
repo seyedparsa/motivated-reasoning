@@ -36,6 +36,7 @@ if __name__ == "__main__":
     # parser.add_argument("--n_train", type=int, help="Number of responses to train on")
     parser.add_argument("--n_questions", type=int, help="Number of questions to load")
     parser.add_argument("--n_test_questions", type=int, help="Number of questions to test on")
+    parser.add_argument("--max_samples", type=int, default=None, help="Cap n_questions to this many samples (smoke test)")
     parser.add_argument("--bs_probe", type=int, default=32, help="Batch size for probing")
     parser.add_argument("--n_ckpts", type=int, help="Number of samples from each response")
     parser.add_argument("--ckpt", type=str, default="rel", help="Checkpointing strategy (rel, prefix, suffix)")
@@ -103,6 +104,9 @@ if __name__ == "__main__":
 
     args.n_questions = scales[args.scale][args.dataset]['n_questions']
     args.n_test_questions = scales[args.scale][args.dataset]['n_test_questions']
+
+    if args.max_samples is not None:
+        args.n_questions = min(args.n_questions, args.max_samples)
 
     if args.generate:
         generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, args.n_questions, args.bs_gen, tag=args.tag)
