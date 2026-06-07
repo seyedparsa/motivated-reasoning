@@ -264,7 +264,11 @@ def extract_answer(output, model_name, dataset_name, mode=None, options=None):
         # Normalize full-width colon to ASCII colon and strip markdown bold/italic
         output_text = output_text.replace('\uff1a', ':')
         output_text = re.sub(r'\*{1,2}(.*?)\*{1,2}', r'\1', output_text)
-        pat_strict = r'Correct choice:\s*[\*\_\-\(\)"""`\']*([A-Z])(?![A-Za-z0-9])'
+        # Strip line-break HTML tags (e.g. <br>, <br/>, <br />) that may appear
+        # between "Correct choice:" and the letter. Keep other tags like <c>
+        # since their contents may BE the answer letter.
+        output_text = re.sub(r'<br\s*/?>', '', output_text, flags=re.IGNORECASE)
+        pat_strict = r'Correct choice:[^A-Za-z0-9]*([A-Za-z])(?![A-Za-z0-9])'
         pat_flex = r'correct\s+(?:choice|answer)(?:\s+is)?\s*:?\s*\*{0,2}([A-Z])(?![A-Za-z0-9])'
         pat_boxed = r'(?:final\s+answer|the\s+final\s+answer)\s*(?:is)?\s*\$\\boxed\{([A-Z])\}\$'
         matches = []
