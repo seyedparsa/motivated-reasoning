@@ -110,7 +110,7 @@ def get_model(model_name, device="auto"):
     print(f"Model dtype: {next(model.parameters()).dtype}")
     return model, tokenizer
 
-def get_dataset(dataset_name, split=None, max_size=None):
+def get_dataset(dataset_name, split=None, max_size=None, start_size=0):
     print(f"Loading dataset: {dataset_name}")
     with open("core/configs/datasets.json", "r") as f:
         config = json.load(f)
@@ -124,8 +124,14 @@ def get_dataset(dataset_name, split=None, max_size=None):
         dataset = load_dataset(repo, subset, split=split)
     else:
         dataset = load_dataset(repo, split=split)
-    if max_size and len(dataset) > max_size:
-        dataset = dataset.select(range(max_size))
+    # Optional slicing: rows [start_size, max_size). When start_size=0 this
+    # matches the historical behaviour (first max_size rows).
+    if max_size is None:
+        max_size = len(dataset)
+    if start_size or max_size < len(dataset):
+        end = min(max_size, len(dataset))
+        start = min(start_size, end)
+        dataset = dataset.select(range(start, end))
     print(f"Dataset {dataset_name} loaded successfully.")
     print(f"Dataset size: {len(dataset)}")
     return dataset

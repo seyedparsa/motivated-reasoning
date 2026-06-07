@@ -21,8 +21,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from core.utils import get_choices, get_dataset, get_model, get_tokenizer, get_sampling_config
 from core.results_db import upsert_rows, upsert_llm_rows
 from datasets import load_from_disk, load_dataset, Dataset
-from huggingface_hub import HfApi
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError, RepositoryNotFoundError
 import os
 import tempfile
 import shutil
@@ -417,15 +417,42 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
 
 
 
-def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_questions, batch_size=64, tag=''):
+def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_questions, batch_size=64, tag='', keep_existing=False):
     log_stage(f"generate_responses: {model_name}/{dataset_name}/{bias or 'unbiased'}")
-    log_stage("Loading model")
 
+    # Resolve output names early so we can check for an existing file.
+    jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{f'{bias}_biased_{hint_idx}' if bias else 'unbiased'}.jsonl"
+    repo_id = f"seyedparsa/{model_name}-{dataset_name}"
+    if tag:
+        repo_id += f"-{tag}"
+
+    # Optional resume: download existing file, count its rows, and skip if
+    # already large enough. Generate only the rows beyond n_existing.
+    n_existing = 0
+    existing_lines = []
+    if keep_existing:
+        try:
+            existing_path = hf_hub_download(
+                repo_id=repo_id, filename=jsonl_name, repo_type="dataset"
+            )
+            with open(existing_path) as f:
+                existing_lines = f.readlines()
+            n_existing = len(existing_lines)
+            print(f"[keep_existing] found {n_existing} existing rows in {repo_id}/{jsonl_name}")
+        except (EntryNotFoundError, RepositoryNotFoundError):
+            print(f"[keep_existing] no existing {jsonl_name} on HF; generating from scratch")
+        if n_existing >= n_questions:
+            print(f"[keep_existing] already have {n_existing} >= {n_questions} rows; nothing to do")
+            return
+
+    log_stage("Loading model")
     model, tokenizer = get_model(model_name)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
     model.eval()
-    dataset = get_dataset(dataset_name, split=split, max_size=n_questions)
+    # Slice to rows [n_existing, n_questions) -- contiguous, deterministic.
+    dataset = get_dataset(dataset_name, split=split, max_size=n_questions, start_size=n_existing)
+    print(f"Generating {len(dataset)} responses (rows {n_existing}..{n_questions - 1})")
     valid_choices = get_choices(dataset_name)
     # stopping_criteria = StoppingCriteriaList([
     #         MultipleChoiceStoppingCriteria(tokenizer, dataset_name, valid_choices)
@@ -495,15 +522,20 @@ def generate_responses(model_name, dataset_name, split, reason_first, bias, hint
     dataset = dataset.add_column("input_token_ids", all_input_token_ids)
     dataset = dataset.add_column("generated_token_ids", all_generated_token_ids)
 
-    jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{f'{bias}_biased_{hint_idx}' if bias else 'unbiased'}.jsonl"
-    repo_id = f"seyedparsa/{model_name}-{dataset_name}"
-    if tag:
-        repo_id += f"-{tag}"
     # Create structured output directory
     output_dir = os.path.join(os.getenv("MOTIVATION_HOME"), "outputs")
     os.makedirs(output_dir, exist_ok=True)
     jsonl_path = os.path.join(output_dir, jsonl_name)
     dataset.to_json(jsonl_path)
+    if existing_lines:
+        # Prepend the existing rows so the uploaded file is the full
+        # [0..n_questions) range. dataset.to_json wrote only the new rows.
+        with open(jsonl_path) as f:
+            new_lines = f.readlines()
+        with open(jsonl_path, "w") as f:
+            f.writelines(existing_lines)
+            f.writelines(new_lines)
+        print(f"[keep_existing] merged {len(existing_lines)} existing + {len(new_lines)} new = {len(existing_lines) + len(new_lines)} rows")
     api = HfApi()
     api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
     hf_upload_with_retry(api, jsonl_path, jsonl_name, repo_id, repo_type="dataset")

@@ -36,7 +36,8 @@ if __name__ == "__main__":
     # parser.add_argument("--n_train", type=int, help="Number of responses to train on")
     parser.add_argument("--n_questions", type=int, help="Number of questions to load")
     parser.add_argument("--n_test_questions", type=int, help="Number of questions to test on")
-    parser.add_argument("--max_samples", type=int, default=None, help="Cap n_questions to this many samples (smoke test)")
+    parser.add_argument("--max_samples", type=int, default=None, help="Cap n_questions to this many samples (smoke tests)")
+    parser.add_argument("--keep_existing", action="store_true", help="If the target HF JSONL already has N rows, only generate rows beyond N and merge")
     parser.add_argument("--bs_probe", type=int, default=32, help="Batch size for probing")
     parser.add_argument("--n_ckpts", type=int, help="Number of samples from each response")
     parser.add_argument("--ckpt", type=str, default="rel", help="Checkpointing strategy (rel, prefix, suffix)")
@@ -116,7 +117,7 @@ if __name__ == "__main__":
         gen_n = args.n_questions + args.n_test_questions
         if args.max_samples is not None:
             gen_n = min(gen_n, args.max_samples)
-        generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, gen_n, args.bs_gen, tag=args.tag)
+        generate_responses(args.model, args.dataset, split, reason_first, args.bias, args.hint_idx, gen_n, args.bs_gen, tag=args.tag, keep_existing=args.keep_existing)
     if args.evaluate:
         evaluate_responses(args.model, args.dataset, split)
     if args.train_probes:
