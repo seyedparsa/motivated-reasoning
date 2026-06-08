@@ -253,7 +253,18 @@ def generate_responses_api(model_name, dataset_name, split, reason_first, bias,
         for txt in outputs:
             tok_ids = tokenizer(txt, return_tensors=None)["input_ids"]
             all_generated_token_ids.append(tok_ids)
-        answers = extract_answers(outputs, model_name, dataset_name, mode="last")
+        # extract_answer expects the response prefixed by an assistant-section
+        # marker (Gemma: "model\n"; Qwen/Llama: "assistant\n"; gpt-oss: "assistantfinal").
+        # The API returns only the assistant content, so prepend the marker so
+        # existing extraction logic works unchanged.
+        if model_name.startswith("gemma"):
+            marker = "model\n"
+        elif model_name.startswith("gpt-oss"):
+            marker = "assistantfinal"
+        else:
+            marker = "assistant\n"
+        marked_outputs = [marker + (txt or "") for txt in outputs]
+        answers = extract_answers(marked_outputs, model_name, dataset_name, mode="last")
         all_outputs.extend(outputs)
         all_answers.extend(answers)
         all_corrects.extend(corrects)
