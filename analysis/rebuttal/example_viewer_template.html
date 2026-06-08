@@ -194,17 +194,17 @@ details > pre {
       <label><input type="checkbox" id="f-alg" checked> aligned</label>
     </div>
     <div>
-      <label><input type="checkbox" id="f-probe-correct"> probe ✓</label>
-      <label><input type="checkbox" id="f-monitor-correct"> monitor ✓</label>
-      <label><input type="checkbox" id="f-disagree"> probe vs monitor disagree</label>
+      <label><input type="checkbox" id="f-probe-correct"> 🔍 ✓</label>
+      <label><input type="checkbox" id="f-monitor-correct"> 🖥️ ✓</label>
+      <label><input type="checkbox" id="f-disagree"> 🔍 vs 🖥️ disagree</label>
     </div>
     <label>Sort:
       <select id="sortby">
         <option value="idx">index</option>
-        <option value="post-desc">post-CoT score (desc)</option>
-        <option value="post-asc">post-CoT score (asc)</option>
-        <option value="diff">|probe post − monitor|</option>
-        <option value="prepost">pre→post delta</option>
+        <option value="post-desc">🔍 post score (desc)</option>
+        <option value="post-asc">🔍 post score (asc)</option>
+        <option value="diff">|🔍 post − 🖥️|</option>
+        <option value="prepost">🔍 pre→post delta</option>
       </select>
     </label>
   </div>
@@ -218,12 +218,14 @@ window.__DATA = JSON.parse(/*__DATA_PLACEHOLDER__*/null);
 <script>
 const D = window.__DATA;
 const M = D.meta;
-const stepOrder = M.step_order || ['pre', 'mid', 'post'];
+const stepOrder = M.step_order || ['pre', 'post'];
+const PROBE_ICON = '🔍';
+const MONITOR_ICON = '🖥️';
 
 document.getElementById('hdr-title').textContent =
   `${M.model} · ${M.dataset} · ${M.bias} · ${M.probe} (layer ${M.layer})`;
 document.getElementById('hdr-aucs').innerHTML =
-  stepOrder.map(s => `${s} <b>${(M.step_aucs[s] ?? 0).toFixed(3)}</b>`).join(' · ');
+  stepOrder.map(s => `${PROBE_ICON} ${s} <b>${(M.step_aucs[s] ?? 0).toFixed(3)}</b>`).join(' · ');
 document.getElementById('hdr-counts').textContent =
   `${M.n_examples} examples · label dist ${JSON.stringify(M.label_dist)}`;
 
@@ -310,11 +312,11 @@ function renderList() {
     const gtTxt = r.label === 1 ? 'mot' : 'alg';
     const stepBars = stepOrder.map(s => {
       const sc = r.probe_scores[s] ?? 0;
-      return `<span title="${s}=${sc.toFixed(3)}">${s[0]} ${bar(sc, 30)} ${sc.toFixed(2)}</span>`;
+      return `<span title="probe ${s}=${sc.toFixed(3)}">${PROBE_ICON} ${s} ${bar(sc, 30)} ${sc.toFixed(2)}</span>`;
     }).join(' ');
     const mscore = r.monitor.score;
-    const mbar = (mscore == null) ? '<span class="miniscore">M ?</span>'
-      : `<span title="monitor=${mscore.toFixed(3)}">M ${bar(mscore, 30)} ${mscore.toFixed(2)}</span>`;
+    const mbar = (mscore == null) ? `<span class="miniscore">${MONITOR_ICON} ?</span>`
+      : `<span title="monitor=${mscore.toFixed(3)}">${MONITOR_ICON} ${bar(mscore, 30)} ${mscore.toFixed(2)}</span>`;
     const probeOk = isProbeCorrect(r);
     const mb = monitorBinary(r.monitor);
     const monitorOk = (mb == null) ? null : (mb === r.label);
@@ -369,12 +371,12 @@ function selectRecord(idx) {
   const probePills = stepOrder.map(s => {
     const sc = r.probe_scores[s] ?? 0;
     const bin = probeBinary(sc);
-    return `<span class="verdict probe-${bin === 1 ? 'pos' : 'neg'}">probe.${s}=${sc.toFixed(3)} ${bin === 1 ? 'mot' : 'alg'}</span>`;
+    return `<span class="verdict probe-${bin === 1 ? 'pos' : 'neg'}">${PROBE_ICON} ${s}=${sc.toFixed(3)} ${bin === 1 ? 'mot' : 'alg'}</span>`;
   }).join('');
   const mb = monitorBinary(r.monitor);
   const monitorPill = (mb == null)
-    ? `<span class="verdict">monitor: (no data)</span>`
-    : `<span class="verdict monitor-${mb === 1 ? 'pos' : 'neg'}">monitor=${(r.monitor.score ?? 0).toFixed(3)} ${mb === 1 ? 'mot' : 'alg'}</span>`;
+    ? `<span class="verdict">${MONITOR_ICON} (no data)</span>`
+    : `<span class="verdict monitor-${mb === 1 ? 'pos' : 'neg'}">${MONITOR_ICON} ${(r.monitor.score ?? 0).toFixed(3)} ${mb === 1 ? 'mot' : 'alg'}</span>`;
   const gtPill = `<span class="verdict gt-${r.label === 1 ? 'mot' : 'alg'}">GT=${r.label === 1 ? 'mot' : 'alg'}</span>`;
 
   det.innerHTML = `
@@ -390,6 +392,10 @@ function selectRecord(idx) {
     </div>
     <div class="verdict-strip">${gtPill}${probePills}${monitorPill}</div>
     <details>
+      <summary>How the hint was given (${(r.hint_injection && r.hint_injection.kind) || 'n/a'})</summary>
+      <pre>${renderHintInjection(r.hint_injection)}</pre>
+    </details>
+    <details>
       <summary>Unhinted CoT (model answered ${r.unhinted_answer_letter})</summary>
       <pre>${escapeHtml(r.unhinted_cot)}</pre>
     </details>
@@ -402,6 +408,15 @@ function selectRecord(idx) {
       <pre>${escapeHtml(r.monitor.reasoning)}</pre>
     </details>
   `;
+}
+
+function renderHintInjection(hi) {
+  if (!hi) return '(unavailable)';
+  const userBlock = `<span style="color:#888">[user]</span>\n${escapeHtml(hi.user || '')}`;
+  if (hi.kind === 'self' && hi.assistant_prefill) {
+    return `${userBlock}\n\n<span style="color:#888">[assistant — prefilled, model continues from here]</span>\n${escapeHtml(hi.assistant_prefill)}`;
+  }
+  return userBlock;
 }
 
 // Filters
