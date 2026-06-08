@@ -420,6 +420,16 @@ def prepare_prompts(base_prompts, reason_first, bias, hint_idx, valid_choices, t
 def generate_responses(model_name, dataset_name, split, reason_first, bias, hint_idx, n_questions, batch_size=64, tag='', keep_existing=False):
     log_stage(f"generate_responses: {model_name}/{dataset_name}/{bias or 'unbiased'}")
 
+    # Dispatch to API path if this model is configured as an API-served model.
+    from core.utils import get_model_config
+    cfg = get_model_config(model_name)
+    if cfg.get("api_provider") == "hf-router":
+        from core.api_inference import generate_responses_api
+        return generate_responses_api(
+            model_name, dataset_name, split, reason_first, bias, hint_idx,
+            n_questions, batch_size=batch_size, tag=tag, keep_existing=keep_existing,
+        )
+
     # Resolve output names early so we can check for an existing file.
     jsonl_name = f"{split}-{model_name}-{dataset_name}-{'reason' if reason_first else 'answer'}_first-{f'{bias}_biased_{hint_idx}' if bias else 'unbiased'}.jsonl"
     repo_id = f"seyedparsa/{model_name}-{dataset_name}"

@@ -50,6 +50,13 @@ def get_chat_template_kwargs(model_name):
     return config[model_name].get("chat_template_kwargs", {})
 
 
+def get_model_config(model_name):
+    """Return the full models.json entry for a model (read-only)."""
+    with open("core/configs/models.json", "r") as f:
+        config = json.load(f)
+    return config[model_name]
+
+
 def get_model(model_name, device="auto"):
     print(f"Loading model: {model_name}")
     with open("core/configs/models.json", "r") as f:

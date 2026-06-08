@@ -53,6 +53,17 @@
       "repo": "google/gemma-3-4b-it",
       "description": "Gemma 3 4B model"
     },
+    "gemma-3-27b-api": {
+      "repo": "google/gemma-3-27b-it",
+      "description": "Gemma 3 27B IT served via HF Inference Providers (router auto-selects fastest provider)",
+      "api_provider": "hf-router",
+      "api_model_id": "google/gemma-3-27b-it",
+      "sampling": {
+        "temperature": 0.1,
+        "top_p": 0.95,
+        "max_new_tokens": 2048
+      }
+    },
     "gpt-oss-20b": {
       "repo": "openai/gpt-oss-20b",
       "description": "GPT-OSS 20B (harmony format, reasoning_effort=medium)",
