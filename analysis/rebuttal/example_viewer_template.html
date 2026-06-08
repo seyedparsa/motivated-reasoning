@@ -328,6 +328,58 @@ details > pre {
   font-size: 13px;
 }
 
+/* Print/PDF: each example starts on its own page; long CoTs flow as needed.
+   The on-screen viewer (header / sidebar / detail) is hidden in print. */
+#print-only { display: none; }
+#btn-print {
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+}
+#btn-print:hover { background: var(--surface); }
+
+@media print {
+  @page { size: letter; margin: 0.5in; }
+  html, body {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: white;
+  }
+  header, #sidebar, #detail { display: none !important; }
+  #print-only { display: block !important; }
+  .print-record {
+    page-break-before: always;
+    break-before: page;
+    padding: 0;
+  }
+  .print-record:first-child {
+    page-break-before: auto;
+    break-before: auto;
+  }
+  .print-record h2 { margin-top: 0; }
+  /* Allow CoT blocks to overflow paginate cleanly */
+  details, details > pre {
+    max-height: none !important;
+    overflow: visible !important;
+    page-break-inside: auto;
+  }
+  /* Avoid orphaning a summary at the bottom of a page */
+  details > summary { page-break-after: avoid; }
+  /* Hide the chevron in print since all <details> are forced open */
+  details > summary::before { display: none; }
+  /* Soft shadows / hovers off in print */
+  .verdict, .qblock, details {
+    box-shadow: none !important;
+  }
+}
+
 /* Subtle scrollbars (WebKit) */
 #list::-webkit-scrollbar, #detail::-webkit-scrollbar,
 details > pre::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -348,6 +400,7 @@ details > pre::-webkit-scrollbar-thumb {
   <span class="meta-item" id="hdr-aucs"></span>
   <span class="meta-item" id="hdr-counts"></span>
   <span class="meta-item">Keys: <span class="kbd">j</span>/<span class="kbd">k</span> next/prev, <span class="kbd">m</span>/<span class="kbd">a</span> filter motivated/aligned, <span class="kbd">d</span> show disagreements, <span class="kbd">esc</span> clear filters</span>
+  <button id="btn-print" type="button" title="Render every example as one-per-page and open the print dialog">🖨️ Print all</button>
 </header>
 <div id="sidebar">
   <div id="controls">
@@ -373,6 +426,7 @@ details > pre::-webkit-scrollbar-thumb {
   <div id="list"></div>
 </div>
 <div id="detail"><div id="empty">Select an example.</div></div>
+<div id="print-only" data-rendered="0"></div>
 
 <script>
 window.__DATA = JSON.parse(/*__DATA_PLACEHOLDER__*/null);
@@ -541,7 +595,17 @@ function selectRecord(idx) {
     : `<span class="verdict monitor-${mb === 1 ? 'pos' : 'neg'}">${MONITOR_ICON} ${(r.monitor.score ?? 0).toFixed(3)} ${mb === 1 ? 'motivated' : 'aligned'}</span>`;
   const gtPill = `<span class="verdict gt-${r.label === 1 ? 'mot' : 'alg'}">GT=${r.label === 1 ? 'motivated' : 'aligned'}</span>`;
 
-  det.innerHTML = `
+  det.innerHTML = recordDetailHtml(r, {openAll: false,
+    choicesHtml, gtPill, probePills, monitorPill});
+}
+
+function recordDetailHtml(r, opts) {
+  const choicesHtml = opts.choicesHtml ?? buildChoicesHtml(r);
+  const gtPill = opts.gtPill ?? buildGtPill(r);
+  const probePills = opts.probePills ?? buildProbePills(r);
+  const monitorPill = opts.monitorPill ?? buildMonitorPill(r);
+  const openAttr = opts.openAll ? ' open' : '';
+  return `
     <h2>#${r.idx} · q_idx ${r.q_idx} · hint ${r.hint_letter ?? '?'}</h2>
     <div class="qblock">
       <div class="qtext-full">${escapeHtml(r.question)}</div>
@@ -553,24 +617,66 @@ function selectRecord(idx) {
       </div>
     </div>
     <div class="verdict-strip">${gtPill}${probePills}${monitorPill}</div>
-    <details>
+    <details${openAttr}>
       <summary>How the hint was given (${(r.hint_injection && r.hint_injection.kind) || 'n/a'})</summary>
       <pre>${renderHintInjection(r.hint_injection)}</pre>
     </details>
-    <details>
+    <details${openAttr}>
       <summary>Unhinted CoT (model answered ${r.unhinted_answer_letter})</summary>
       <pre>${escapeHtml(r.unhinted_cot)}</pre>
     </details>
-    <details open>
+    <details${opts.openAll ? ' open' : ' open'}>
       <summary>Hinted CoT — hint=${r.hint_letter ?? '?'} (model answered ${r.hinted_answer_letter})</summary>
       <pre>${escapeHtml(r.hinted_cot)}</pre>
     </details>
-    <details>
+    <details${openAttr}>
       <summary>LLM monitor reasoning ${r.monitor.is_motivated == null ? '' : `(verdict: ${r.monitor.is_motivated ? 'motivated' : 'aligned'})`}</summary>
       <pre>${escapeHtml(r.monitor.reasoning)}</pre>
     </details>
   `;
 }
+
+function buildChoicesHtml(r) {
+  const choiceLetters = r.choice_letters || ['A', 'B', 'C', 'D'];
+  return (r.choices || []).map((c, i) => {
+    const letter = choiceLetters[i];
+    const isCorrect = letter === r.correct_letter;
+    const isHint = letter === r.hint_letter;
+    return `<div class="choice ${isCorrect ? 'correct' : ''} ${isHint ? 'hint' : ''}">
+              <b>${letter}.</b> ${escapeHtml(c)}
+            </div>`;
+  }).join('');
+}
+function buildGtPill(r) {
+  return `<span class="verdict gt-${r.label === 1 ? 'mot' : 'alg'}">GT=${r.label === 1 ? 'motivated' : 'aligned'}</span>`;
+}
+function buildProbePills(r) {
+  return stepOrder.map(s => {
+    const sc = r.probe_scores[s] ?? 0;
+    const bin = probeBinary(sc);
+    return `<span class="verdict probe-${bin === 1 ? 'pos' : 'neg'}">${PROBE_ICON} ${s}=${sc.toFixed(3)} ${bin === 1 ? 'motivated' : 'aligned'}</span>`;
+  }).join('');
+}
+function buildMonitorPill(r) {
+  const mb = monitorBinary(r.monitor);
+  return (mb == null)
+    ? `<span class="verdict">${MONITOR_ICON} (no data)</span>`
+    : `<span class="verdict monitor-${mb === 1 ? 'pos' : 'neg'}">${MONITOR_ICON} ${(r.monitor.score ?? 0).toFixed(3)} ${mb === 1 ? 'motivated' : 'aligned'}</span>`;
+}
+
+// Pre-render every record for printing. Lazy: only on first print request.
+function ensurePrintRendered() {
+  const root = document.getElementById('print-only');
+  if (!root || root.dataset.rendered === '1') return;
+  const html = D.records.map(r =>
+    `<div class="print-record">${recordDetailHtml(r, {openAll: true})}</div>`
+  ).join('');
+  root.innerHTML = html;
+  root.dataset.rendered = '1';
+}
+window.addEventListener('beforeprint', ensurePrintRendered);
+const btnPrint = document.getElementById('btn-print');
+if (btnPrint) btnPrint.addEventListener('click', () => { ensurePrintRendered(); window.print(); });
 
 function renderHintInjection(hi) {
   if (!hi) return '(unavailable)';
