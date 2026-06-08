@@ -1,6 +1,6 @@
 # Catching Rationalization in the Act
 
-Code for [*Catching rationalization in the act: detecting motivated reasoning before and after CoT via activation probing*](https://arxiv.org/abs/2603.17199) by Parsa Mirtaheri and Mikhail Belkin (UC San Diego).
+Code for [*Catching rationalization in the act: detecting motivated reasoning before and after CoT via activation probing*](https://arxiv.org/abs/2603.17199)
 
 ## Abstract
 
